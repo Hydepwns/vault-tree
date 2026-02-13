@@ -48,6 +48,76 @@ The plugin runs an MCP server on port 22365 (WebSocket for Claude Code CLI) and 
 
 ## Tools
 
+### Knowledge Providers
+
+Look up external information from FOSS knowledge bases:
+
+| Provider | Type | Data |
+|----------|------|------|
+| `wikipedia` | Encyclopedia | Articles, summaries |
+| `dbpedia` | Structured data | Wikipedia as linked data |
+| `wikidata` | Knowledge graph | Entities, relations, QIDs |
+| `openlibrary` | Books | Authors, works, ISBNs |
+| `arxiv` | Academic | Papers, authors, abstracts |
+| `github` | Code | Repos, users, stars |
+| `sourceforge` | Code | Projects, downloads |
+| `musicbrainz` | Music | Artists, albums, tracks |
+| `wikiart` | Art | Artists, paintings |
+| `defillama` | DeFi/Crypto | Protocols, TVL, chains |
+| `shodan` | Security | IPs, ports, vulns (needs API key) |
+
+```json
+{
+  "name": "knowledge_lookup",
+  "arguments": {
+    "query": "Functional programming",
+    "provider": "wikipedia"
+  }
+}
+```
+
+### AI Link Suggestions
+
+Use local (Ollama) or cloud (OpenAI/OpenRouter) LLMs to suggest internal links:
+
+```json
+{
+  "name": "suggest_links",
+  "arguments": {
+    "file_path": "path/to/note.md",
+    "apply": true
+  }
+}
+```
+
+### Batch Processing
+
+Process entire folders:
+
+```json
+{
+  "name": "batch_suggest_links",
+  "arguments": {
+    "folder_path": "Writing",
+    "apply": true
+  }
+}
+```
+
+### Note Generation
+
+Create notes from knowledge lookups:
+
+```json
+{
+  "name": "create_note",
+  "arguments": {
+    "query": "Uniswap",
+    "provider": "defillama"
+  }
+}
+```
+
 ### vault_tree
 
 Generates an annotated tree of your vault:

@@ -1,4 +1,4 @@
-import { App, TFile } from "obsidian";
+import { App, TFile, CachedMetadata } from "obsidian";
 import type { ToolDefinition, ToolCallResult } from "./types";
 import { buildVaultTree } from "../tree/builder";
 import { formatTreeOutput } from "../tree/renderer";
@@ -10,6 +10,32 @@ import { triageInbox, formatTriageSuggestions, applyTriageDecisions } from "../o
 import { ingestFiles, formatIngestResult } from "../organize/ingest";
 import { findDuplicates, buildHashIndex } from "../organize/fingerprint";
 import { DEFAULT_ORGANIZE_SETTINGS } from "../organize/types";
+import { getKnowledgeRegistry, type KnowledgeProviderType } from "../knowledge/registry";
+import { OllamaProvider } from "../knowledge/providers/ai/ollama";
+import { OpenAIProvider } from "../knowledge/providers/ai/openai";
+import type { VaultContext, LinkSuggestion } from "../knowledge/types";
+import { insertLinks, previewChanges } from "../knowledge/linker";
+import { generateNoteFromEntry, formatNoteContent, type GeneratorOptions } from "../knowledge/generator";
+import {
+  collectFilesFromFolder,
+  batchSuggestLinks,
+  batchApplyLinks,
+  formatBatchResult,
+  formatBatchApplyResult,
+} from "../knowledge/batch";
+
+const errorResult = (message: string): ToolCallResult => ({
+  content: [{ type: "text", text: `Error: ${message}` }],
+});
+
+const textResult = (text: string): ToolCallResult => ({
+  content: [{ type: "text", text }],
+});
+
+const getMarkdownFile = (app: App, path: string): TFile | null => {
+  const file = app.vault.getAbstractFileByPath(path);
+  return file instanceof TFile ? file : null;
+};
 
 export function getToolDefinitions(): ToolDefinition[] {
   return [
@@ -144,6 +170,161 @@ export function getToolDefinitions(): ToolDefinition[] {
         properties: {},
       },
     },
+    {
+      name: "knowledge_lookup",
+      description: "Look up information from Wikipedia, DBpedia, GitHub, OpenLibrary, arXiv, MusicBrainz, WikiArt, or Shodan",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "Search query, Wikidata QID (e.g., Q42), or arXiv search terms",
+          },
+          provider: {
+            type: "string",
+            enum: ["wikipedia", "dbpedia", "wikidata", "github", "sourceforge", "openlibrary", "arxiv", "musicbrainz", "wikiart", "defillama", "shodan", "auto"],
+            description: "Provider to use (default: auto)",
+          },
+          max_results: {
+            type: "integer",
+            description: "Maximum number of results (default: 5)",
+          },
+          language: {
+            type: "string",
+            description: "Language code (default: en)",
+          },
+        },
+        required: ["query"],
+      },
+    },
+    {
+      name: "suggest_links",
+      description: "Use AI to suggest internal links for a note based on content",
+      inputSchema: {
+        type: "object",
+        properties: {
+          file_path: {
+            type: "string",
+            description: "Path to the note file (relative to vault root)",
+          },
+          max_suggestions: {
+            type: "integer",
+            description: "Maximum number of suggestions (default: 10)",
+          },
+          min_confidence: {
+            type: "number",
+            description: "Minimum confidence threshold 0-1 (default: 0.5)",
+          },
+          apply: {
+            type: "boolean",
+            description: "If true, insert the suggested links into the note (default: false)",
+          },
+          first_match_only: {
+            type: "boolean",
+            description: "When applying, only link the first occurrence of each target (default: true)",
+          },
+        },
+        required: ["file_path"],
+      },
+    },
+    {
+      name: "apply_links",
+      description: "Insert internal links into a note at positions where target note titles appear",
+      inputSchema: {
+        type: "object",
+        properties: {
+          file_path: {
+            type: "string",
+            description: "Path to the note file (relative to vault root)",
+          },
+          targets: {
+            type: "array",
+            items: { type: "string" },
+            description: "List of note titles to link to",
+          },
+          first_match_only: {
+            type: "boolean",
+            description: "Only link the first occurrence of each target (default: true)",
+          },
+          dry_run: {
+            type: "boolean",
+            description: "If true, preview changes without modifying the file (default: false)",
+          },
+        },
+        required: ["file_path", "targets"],
+      },
+    },
+    {
+      name: "create_note",
+      description: "Create a note from a knowledge lookup result (Wikipedia, arXiv, OpenLibrary, etc.)",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "Search query to look up",
+          },
+          provider: {
+            type: "string",
+            enum: ["wikipedia", "dbpedia", "wikidata", "github", "sourceforge", "openlibrary", "arxiv", "musicbrainz", "wikiart", "defillama", "shodan", "auto"],
+            description: "Provider to use (default: auto)",
+          },
+          result_index: {
+            type: "integer",
+            description: "Which result to use (0-indexed, default: 0)",
+          },
+          template_style: {
+            type: "string",
+            enum: ["minimal", "standard", "detailed"],
+            description: "Note template style (default: standard)",
+          },
+          target_folder: {
+            type: "string",
+            description: "Folder to create note in (default: based on source)",
+          },
+          dry_run: {
+            type: "boolean",
+            description: "If true, preview without creating file (default: false)",
+          },
+        },
+        required: ["query"],
+      },
+    },
+    {
+      name: "batch_suggest_links",
+      description: "Use AI to suggest internal links for all notes in a folder",
+      inputSchema: {
+        type: "object",
+        properties: {
+          folder_path: {
+            type: "string",
+            description: "Folder to process (relative to vault root)",
+          },
+          max_suggestions: {
+            type: "integer",
+            description: "Max suggestions per file (default: 5)",
+          },
+          min_confidence: {
+            type: "number",
+            description: "Minimum confidence threshold 0-1 (default: 0.5)",
+          },
+          apply: {
+            type: "boolean",
+            description: "If true, insert the suggested links (default: false)",
+          },
+          dry_run: {
+            type: "boolean",
+            description: "If true with apply, preview without modifying (default: false)",
+          },
+          exclude_patterns: {
+            type: "array",
+            items: { type: "string" },
+            description: "Glob patterns to exclude (e.g., ['templates/*'])",
+          },
+        },
+        required: ["folder_path"],
+      },
+    },
   ];
 }
 
@@ -168,6 +349,16 @@ export async function callTool(
       return handleOrganizeIngest(app, args);
     case "find_duplicates":
       return handleFindDuplicates(app);
+    case "knowledge_lookup":
+      return handleKnowledgeLookup(settings, args);
+    case "suggest_links":
+      return handleSuggestLinks(app, settings, args);
+    case "apply_links":
+      return handleApplyLinks(app, args);
+    case "create_note":
+      return handleCreateNote(app, settings, args);
+    case "batch_suggest_links":
+      return handleBatchSuggestLinks(app, settings, args);
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
@@ -178,14 +369,22 @@ async function handleVaultTree(
   args: Record<string, unknown>
 ): Promise<ToolCallResult> {
   const depth = typeof args.depth === "number" ? args.depth : undefined;
-
   const result = await buildVaultTree(app, { depth });
-  const output = formatTreeOutput(result);
-
-  return {
-    content: [{ type: "text", text: output }],
-  };
+  return textResult(formatTreeOutput(result));
 }
+
+type LineMatch = { lineNum: number; content: string };
+type FileMatches = { path: string; matches: LineMatch[] };
+
+const findMatchingLines = (content: string, regex: RegExp, limit: number): LineMatch[] =>
+  content
+    .split("\n")
+    .map((line, i) => ({ lineNum: i + 1, content: line }))
+    .filter(({ content }) => regex.test(content))
+    .slice(0, limit);
+
+const formatFileMatches = ({ path, matches }: FileMatches): string =>
+  `## ${path}\n${matches.map((m) => `  ${m.lineNum}: ${m.content}`).join("\n")}`;
 
 async function handleVaultSearch(
   app: App,
@@ -196,41 +395,39 @@ async function handleVaultSearch(
   const maxResults = typeof args.max_results === "number" ? args.max_results : 100;
 
   const regex = new RegExp(pattern, caseInsensitive ? "i" : "");
-  const results: string[] = [];
-  let matchCount = 0;
-
   const files = app.vault.getMarkdownFiles();
 
-  for (const file of files) {
-    if (matchCount >= maxResults) break;
-
+  const searchFile = async (file: TFile): Promise<FileMatches | null> => {
     try {
       const content = await app.vault.cachedRead(file);
-      const lines = content.split("\n");
-      const fileMatches: string[] = [];
-
-      for (let i = 0; i < lines.length; i++) {
-        if (matchCount >= maxResults) break;
-
-        if (regex.test(lines[i])) {
-          fileMatches.push(`  ${i + 1}: ${lines[i]}`);
-          matchCount++;
-        }
-      }
-
-      if (fileMatches.length > 0) {
-        results.push(`## ${file.path}\n${fileMatches.join("\n")}`);
-      }
+      const matches = findMatchingLines(content, regex, maxResults);
+      return matches.length > 0 ? { path: file.path, matches } : null;
     } catch {
-      // Skip files that can't be read
+      return null;
     }
-  }
-
-  const output = results.length > 0 ? results.join("\n\n") : "No matches found.";
-
-  return {
-    content: [{ type: "text", text: output }],
   };
+
+  const allMatches = await Promise.all(files.map(searchFile));
+  const validMatches = allMatches.filter((m): m is FileMatches => m !== null);
+
+  const truncated = validMatches.reduce<{ results: FileMatches[]; count: number }>(
+    (acc, fileMatch) => {
+      if (acc.count >= maxResults) return acc;
+      const remaining = maxResults - acc.count;
+      const truncatedMatches = fileMatch.matches.slice(0, remaining);
+      return {
+        results: [...acc.results, { ...fileMatch, matches: truncatedMatches }],
+        count: acc.count + truncatedMatches.length,
+      };
+    },
+    { results: [], count: 0 }
+  );
+
+  const output = truncated.results.length > 0
+    ? truncated.results.map(formatFileMatches).join("\n\n")
+    : "No matches found.";
+
+  return textResult(output);
 }
 
 async function handlePublishPost(
@@ -243,45 +440,25 @@ async function handlePublishPost(
   const updateIfExists = args.update_if_exists !== false;
 
   if (!settings.apiToken && !dryRun) {
-    return {
-      content: [{
-        type: "text",
-        text: "Error: API token not configured. Set it in Vault Tree plugin settings.",
-      }],
-    };
+    return errorResult("API token not configured. Set it in Vault Tree plugin settings.");
   }
 
-  const file = app.vault.getAbstractFileByPath(filePath);
-  if (!file || !(file instanceof TFile)) {
-    return {
-      content: [{
-        type: "text",
-        text: `Error: File not found: ${filePath}`,
-      }],
-    };
+  const file = getMarkdownFile(app, filePath);
+  if (!file) {
+    return errorResult(`File not found: ${filePath}`);
   }
 
   const content = await app.vault.read(file);
 
   const metadata = extractMetadataFromFrontmatter(content);
   if (!metadata) {
-    return {
-      content: [{
-        type: "text",
-        text: "Error: No frontmatter found in file. Add YAML frontmatter with title, date, description, tags, and slug.",
-      }],
-    };
+    return errorResult("No frontmatter found in file. Add YAML frontmatter with title, date, description, tags, and slug.");
   }
 
   const validation = validateMetadata(metadata);
   if (!validation.valid) {
     const errorList = validation.errors.map((e) => `- ${e.field}: ${e.message}`).join("\n");
-    return {
-      content: [{
-        type: "text",
-        text: `Validation failed:\n${errorList}`,
-      }],
-    };
+    return textResult(`Validation failed:\n${errorList}`);
   }
 
   const postMetadata = metadata as PostMetadata;
@@ -294,35 +471,20 @@ async function handlePublishPost(
   const exists = await checkPostExists(postMetadata.slug, options);
 
   if (exists && !updateIfExists) {
-    return {
-      content: [{
-        type: "text",
-        text: `Error: Post with slug "${postMetadata.slug}" already exists. Set update_if_exists=true to update it.`,
-      }],
-    };
+    return errorResult(`Post with slug "${postMetadata.slug}" already exists. Set update_if_exists=true to update it.`);
   }
 
   const result = exists
     ? await updatePost(postMetadata.slug, content, postMetadata, options)
     : await publishPost(content, postMetadata, options);
 
-  if (result.success) {
-    const action = exists ? "Updated" : "Published";
-    const mode = dryRun ? " (dry run)" : "";
-    return {
-      content: [{
-        type: "text",
-        text: `${action}${mode}: ${result.url}`,
-      }],
-    };
-  } else {
-    return {
-      content: [{
-        type: "text",
-        text: `Error: ${result.error}`,
-      }],
-    };
+  if (!result.success) {
+    return errorResult(result.error ?? "Unknown error");
   }
+
+  const action = exists ? "Updated" : "Published";
+  const mode = dryRun ? " (dry run)" : "";
+  return textResult(`${action}${mode}: ${result.url}`);
 }
 
 async function handleValidatePost(
@@ -331,72 +493,57 @@ async function handleValidatePost(
 ): Promise<ToolCallResult> {
   const filePath = args.file_path as string;
 
-  const file = app.vault.getAbstractFileByPath(filePath);
-  if (!file || !(file instanceof TFile)) {
-    return {
-      content: [{
-        type: "text",
-        text: `Error: File not found: ${filePath}`,
-      }],
-    };
+  const file = getMarkdownFile(app, filePath);
+  if (!file) {
+    return errorResult(`File not found: ${filePath}`);
   }
 
   const content = await app.vault.read(file);
 
   const metadata = extractMetadataFromFrontmatter(content);
   if (!metadata) {
-    return {
-      content: [{
-        type: "text",
-        text: "Error: No frontmatter found in file.",
-      }],
-    };
+    return errorResult("No frontmatter found in file.");
   }
 
   const validation = validateMetadata(metadata);
   const stats = calculatePostStats(content);
 
-  const lines: string[] = [];
+  const optionalFields = [
+    metadata.author && `- Author: ${metadata.author}`,
+    metadata.series && `- Series: ${metadata.series}`,
+    metadata.series_order && `- Series Order: ${metadata.series_order}`,
+  ].filter(Boolean);
 
-  lines.push(`File: ${filePath}`);
-  lines.push(`Status: ${validation.valid ? "Valid" : "Invalid"}`);
-  lines.push("");
-  lines.push("## Metadata");
-  lines.push(`- Title: ${metadata.title || "(missing)"}`);
-  lines.push(`- Slug: ${metadata.slug || "(missing)"}`);
-  lines.push(`- Date: ${metadata.date || "(missing)"}`);
-  lines.push(`- Tags: ${(metadata.tags || []).join(", ") || "(missing)"}`);
-  lines.push(`- Description: ${metadata.description || "(missing)"}`);
-  if (metadata.author) lines.push(`- Author: ${metadata.author}`);
-  if (metadata.series) lines.push(`- Series: ${metadata.series}`);
-  if (metadata.series_order) lines.push(`- Series Order: ${metadata.series_order}`);
+  const errors = validation.errors.length > 0
+    ? ["", "## Errors", ...validation.errors.map((e) => `- ${e.field}: ${e.message}`)]
+    : [];
 
-  lines.push("");
-  lines.push("## Stats");
-  lines.push(`- Word count: ${stats.wordCount}`);
-  lines.push(`- Reading time: ${stats.estimatedReadingTime}`);
-  lines.push(`- Links: ${stats.linkCount}`);
-  lines.push(`- Images: ${stats.imageCount}`);
+  const warnings = validation.warnings.length > 0
+    ? ["", "## Warnings", ...validation.warnings.map((w) => `- ${w.field}: ${w.message}`)]
+    : [];
 
-  if (validation.errors.length > 0) {
-    lines.push("");
-    lines.push("## Errors");
-    for (const error of validation.errors) {
-      lines.push(`- ${error.field}: ${error.message}`);
-    }
-  }
+  const output = [
+    `File: ${filePath}`,
+    `Status: ${validation.valid ? "Valid" : "Invalid"}`,
+    "",
+    "## Metadata",
+    `- Title: ${metadata.title || "(missing)"}`,
+    `- Slug: ${metadata.slug || "(missing)"}`,
+    `- Date: ${metadata.date || "(missing)"}`,
+    `- Tags: ${(metadata.tags || []).join(", ") || "(missing)"}`,
+    `- Description: ${metadata.description || "(missing)"}`,
+    ...optionalFields,
+    "",
+    "## Stats",
+    `- Word count: ${stats.wordCount}`,
+    `- Reading time: ${stats.estimatedReadingTime}`,
+    `- Links: ${stats.linkCount}`,
+    `- Images: ${stats.imageCount}`,
+    ...errors,
+    ...warnings,
+  ].join("\n");
 
-  if (validation.warnings.length > 0) {
-    lines.push("");
-    lines.push("## Warnings");
-    for (const warning of validation.warnings) {
-      lines.push(`- ${warning.field}: ${warning.message}`);
-    }
-  }
-
-  return {
-    content: [{ type: "text", text: lines.join("\n") }],
-  };
+  return textResult(output);
 }
 
 async function handleOrganizeTriage(
@@ -418,38 +565,27 @@ async function handleOrganizeTriage(
   const items = await triageInbox(app, organizeSettings);
 
   if (items.length === 0) {
-    return {
-      content: [{
-        type: "text",
-        text: `No files found in inbox folder: ${inboxFolder}`,
-      }],
-    };
+    return textResult(`No files found in inbox folder: ${inboxFolder}`);
   }
 
-  if (autoApply) {
-    // Auto-accept items above confidence threshold
-    for (const item of items) {
-      if (item.suggestion.confidence >= minConfidence && item.suggestion.suggestedFolder) {
-        item.status = "accepted";
-      }
-    }
-
-    const result = await applyTriageDecisions(app, items);
-
-    return {
-      content: [{
-        type: "text",
-        text: `Auto-triage complete:\n- Processed: ${result.processed}\n- Accepted: ${result.accepted}\n- Skipped (low confidence): ${items.length - result.processed}`,
-      }],
-    };
+  if (!autoApply) {
+    return textResult(formatTriageSuggestions(items));
   }
 
-  // Return suggestions for review
-  const output = formatTriageSuggestions(items);
+  const markedItems = items.map((item) =>
+    item.suggestion.confidence >= minConfidence && item.suggestion.suggestedFolder
+      ? { ...item, status: "accepted" as const }
+      : item
+  );
 
-  return {
-    content: [{ type: "text", text: output }],
-  };
+  const result = await applyTriageDecisions(app, markedItems);
+
+  return textResult([
+    "Auto-triage complete:",
+    `- Processed: ${result.processed}`,
+    `- Accepted: ${result.accepted}`,
+    `- Skipped (low confidence): ${items.length - result.processed}`,
+  ].join("\n"));
 }
 
 async function handleOrganizeIngest(
@@ -462,33 +598,19 @@ async function handleOrganizeIngest(
   const autoFrontmatter = args.auto_frontmatter !== false;
   const dryRun = args.dry_run === true;
 
-  // Get files from source folder
   const folder = app.vault.getAbstractFileByPath(sourceFolder);
   if (!folder) {
-    return {
-      content: [{
-        type: "text",
-        text: `Error: Source folder not found: ${sourceFolder}`,
-      }],
-    };
+    return errorResult(`Source folder not found: ${sourceFolder}`);
   }
 
-  const files: string[] = [];
-  if ("children" in folder) {
-    for (const child of (folder as any).children) {
-      if (child instanceof TFile) {
-        files.push(child.path);
-      }
-    }
-  }
+  const files = "children" in folder
+    ? (folder as { children: unknown[] }).children
+        .filter((child): child is TFile => child instanceof TFile)
+        .map((f) => f.path)
+    : [];
 
   if (files.length === 0) {
-    return {
-      content: [{
-        type: "text",
-        text: `No files found in source folder: ${sourceFolder}`,
-      }],
-    };
+    return textResult(`No files found in source folder: ${sourceFolder}`);
   }
 
   const result = await ingestFiles(app, files, {
@@ -498,15 +620,8 @@ async function handleOrganizeIngest(
     dryRun,
   });
 
-  const output = formatIngestResult(result);
   const mode = dryRun ? " (dry run)" : "";
-
-  return {
-    content: [{
-      type: "text",
-      text: `Ingest complete${mode}:\n\n${output}`,
-    }],
-  };
+  return textResult(`Ingest complete${mode}:\n\n${formatIngestResult(result)}`);
 }
 
 async function handleFindDuplicates(app: App): Promise<ToolCallResult> {
@@ -514,27 +629,332 @@ async function handleFindDuplicates(app: App): Promise<ToolCallResult> {
   const duplicates = findDuplicates(index);
 
   if (duplicates.size === 0) {
-    return {
-      content: [{
-        type: "text",
-        text: "No duplicate files found.",
-      }],
-    };
+    return textResult("No duplicate files found.");
   }
 
-  const lines: string[] = [];
-  lines.push(`## Duplicate Files Found (${duplicates.size} groups)`);
-  lines.push("");
+  const formatGroup = ([hash, files]: [string, string[]]): string =>
+    [`### Hash: ${hash.slice(0, 8)}...`, ...files.map((f) => `- ${f}`), ""].join("\n");
 
-  for (const [hash, files] of duplicates) {
-    lines.push(`### Hash: ${hash.slice(0, 8)}...`);
-    for (const file of files) {
-      lines.push(`- ${file}`);
+  const output = [
+    `## Duplicate Files Found (${duplicates.size} groups)`,
+    "",
+    ...Array.from(duplicates.entries()).map(formatGroup),
+  ].join("\n");
+
+  return textResult(output);
+}
+
+async function handleKnowledgeLookup(
+  settings: VaultTreeSettings,
+  args: Record<string, unknown>
+): Promise<ToolCallResult> {
+  const query = args.query as string;
+  const providerType = (args.provider as KnowledgeProviderType) || settings.knowledgeDefaultProvider || "auto";
+  const maxResults = typeof args.max_results === "number" ? args.max_results : 5;
+  const language = (args.language as string) || "en";
+
+  const registry = getKnowledgeRegistry();
+
+  if (settings.shodanApiKey) {
+    registry.configureShodan(settings.shodanApiKey);
+  }
+
+  const result = await registry.lookup(query, providerType, { maxResults, language });
+
+  if (!result.success) {
+    return errorResult(result.error ?? "Unknown error");
+  }
+
+  if (result.entries.length === 0) {
+    return textResult(`No results found for "${query}" using ${result.provider}`);
+  }
+
+  const formatEntry = (entry: typeof result.entries[0]): string =>
+    [`### ${entry.title}`, entry.summary, entry.url ? `URL: ${entry.url}` : "", ""]
+      .filter(Boolean)
+      .join("\n");
+
+  const cacheNote = result.cached ? " [cached]" : "";
+  const output = [
+    `## Results from ${result.provider} (${result.entries.length})${cacheNote}`,
+    "",
+    ...result.entries.map(formatEntry),
+  ].join("\n");
+
+  return textResult(output);
+}
+
+const createAIProvider = (settings: VaultTreeSettings) => {
+  if (settings.aiProvider === "ollama") {
+    return new OllamaProvider({
+      baseUrl: settings.ollamaUrl,
+      model: settings.aiModel,
+    });
+  }
+  return new OpenAIProvider({
+    apiKey: settings.aiApiKey,
+    baseUrl: settings.aiApiUrl,
+    model: settings.aiModel,
+  });
+};
+
+async function handleSuggestLinks(
+  app: App,
+  settings: VaultTreeSettings,
+  args: Record<string, unknown>
+): Promise<ToolCallResult> {
+  const filePath = args.file_path as string;
+  const maxSuggestions = typeof args.max_suggestions === "number" ? args.max_suggestions : 10;
+  const minConfidence = typeof args.min_confidence === "number" ? args.min_confidence : 0.5;
+  const shouldApply = args.apply === true;
+  const firstMatchOnly = args.first_match_only !== false;
+
+  if (settings.aiProvider === "none") {
+    return errorResult("AI provider not configured. Enable Ollama or OpenAI in plugin settings.");
+  }
+
+  const file = getMarkdownFile(app, filePath);
+  if (!file) {
+    return errorResult(`File not found: ${filePath}`);
+  }
+
+  const content = await app.vault.read(file);
+  const vaultContext = buildVaultContext(app);
+
+  const registry = getKnowledgeRegistry();
+  registry.registerAIProvider(createAIProvider(settings));
+
+  const result = await registry.suggestLinks(settings.aiProvider, content, filePath, vaultContext);
+
+  if (!result.success) {
+    return errorResult(result.error ?? "Unknown error");
+  }
+
+  const filtered = result.suggestions
+    .filter((s) => s.confidence >= minConfidence)
+    .slice(0, maxSuggestions);
+
+  if (filtered.length === 0) {
+    return textResult(`No link suggestions above ${minConfidence} confidence for "${filePath}"`);
+  }
+
+  if (shouldApply) {
+    const insertResult = insertLinks(content, filtered, { firstMatchOnly });
+
+    if (insertResult.insertedLinks > 0) {
+      await app.vault.modify(file, insertResult.newContent);
     }
-    lines.push("");
+
+    const output = [
+      `## Links Applied to ${filePath}`,
+      `Provider: ${result.provider}`,
+      "",
+      previewChanges(insertResult),
+    ].join("\n");
+
+    return textResult(output);
   }
+
+  const formatSuggestion = (s: LinkSuggestion): string => [
+    `### [[${s.targetNote}]] (${Math.round(s.confidence * 100)}%)`,
+    s.reason,
+    s.suggestedText ? `Suggested text: "${s.suggestedText}"` : "",
+    "",
+  ].filter(Boolean).join("\n");
+
+  const output = [
+    `## Link Suggestions for ${filePath}`,
+    `Provider: ${result.provider}`,
+    "",
+    ...filtered.map(formatSuggestion),
+    "---",
+    "Use `apply: true` to insert these links into the note.",
+  ].join("\n");
+
+  return textResult(output);
+}
+
+async function handleApplyLinks(
+  app: App,
+  args: Record<string, unknown>
+): Promise<ToolCallResult> {
+  const filePath = args.file_path as string;
+  const targets = args.targets as string[];
+  const firstMatchOnly = args.first_match_only !== false;
+  const dryRun = args.dry_run === true;
+
+  if (!Array.isArray(targets) || targets.length === 0) {
+    return errorResult("targets must be a non-empty array of note titles");
+  }
+
+  const file = getMarkdownFile(app, filePath);
+  if (!file) {
+    return errorResult(`File not found: ${filePath}`);
+  }
+
+  const content = await app.vault.read(file);
+
+  const suggestions: LinkSuggestion[] = targets.map((target) => ({
+    targetNote: target,
+    confidence: 1.0,
+    reason: "Manual link request",
+  }));
+
+  const insertResult = insertLinks(content, suggestions, { firstMatchOnly });
+
+  if (insertResult.insertedLinks === 0) {
+    return textResult(`No matches found for the specified targets in "${filePath}"`);
+  }
+
+  if (!dryRun) {
+    await app.vault.modify(file, insertResult.newContent);
+  }
+
+  const output = [
+    `## Links ${dryRun ? "Preview" : "Applied"}${dryRun ? " (dry run)" : ""}`,
+    `File: ${filePath}`,
+    "",
+    previewChanges(insertResult),
+  ].join("\n");
+
+  return textResult(output);
+}
+
+const extractTagsFromCache = (cache: CachedMetadata | null): string[] => {
+  const inlineTags = cache?.tags?.map((t) => t.tag) ?? [];
+  const frontmatterTags = Array.isArray(cache?.frontmatter?.tags)
+    ? cache.frontmatter.tags.map((t: unknown) =>
+        typeof t === "string" ? `#${t}` : String(t)
+      )
+    : [];
+  return [...inlineTags, ...frontmatterTags];
+};
+
+function buildVaultContext(app: App): VaultContext {
+  const files = app.vault.getMarkdownFiles();
 
   return {
-    content: [{ type: "text", text: lines.join("\n") }],
+    notePaths: files.map((f) => f.path),
+    noteTitles: files.map((f) => f.basename),
+    tags: [
+      ...new Set(
+        files.flatMap((f) => extractTagsFromCache(app.metadataCache.getFileCache(f)))
+      ),
+    ],
   };
+}
+
+async function handleCreateNote(
+  app: App,
+  settings: VaultTreeSettings,
+  args: Record<string, unknown>
+): Promise<ToolCallResult> {
+  const query = args.query as string;
+  const providerType = (args.provider as KnowledgeProviderType) || settings.knowledgeDefaultProvider || "auto";
+  const resultIndex = typeof args.result_index === "number" ? args.result_index : 0;
+  const templateStyle = (args.template_style as "minimal" | "standard" | "detailed") || "standard";
+  const targetFolder = args.target_folder as string | undefined;
+  const dryRun = args.dry_run === true;
+
+  const registry = getKnowledgeRegistry();
+  const result = await registry.lookup(query, providerType, { maxResults: resultIndex + 1 });
+
+  if (!result.success) {
+    return errorResult(result.error ?? "Unknown error");
+  }
+
+  if (result.entries.length === 0) {
+    return textResult(`No results found for "${query}"`);
+  }
+
+  if (resultIndex >= result.entries.length) {
+    return errorResult(`result_index ${resultIndex} out of range (${result.entries.length} results)`);
+  }
+
+  const entry = result.entries[resultIndex];
+  const options: GeneratorOptions = {
+    templateStyle,
+    folderMapping: targetFolder ? { [entry.source]: targetFolder } : undefined,
+  };
+
+  const template = generateNoteFromEntry(entry, options);
+  const noteContent = formatNoteContent(template);
+  const notePath = targetFolder
+    ? `${targetFolder}/${template.title.replace(/[<>:"/\\|?*]/g, "")}.md`
+    : template.suggestedPath ?? `${template.title}.md`;
+
+  if (dryRun) {
+    const output = [
+      "## Note Preview (dry run)",
+      `Path: ${notePath}`,
+      "",
+      "```markdown",
+      noteContent,
+      "```",
+    ].join("\n");
+
+    return textResult(output);
+  }
+
+  const folderPath = notePath.substring(0, notePath.lastIndexOf("/"));
+  if (folderPath && !app.vault.getAbstractFileByPath(folderPath)) {
+    await app.vault.createFolder(folderPath);
+  }
+
+  if (app.vault.getAbstractFileByPath(notePath)) {
+    return errorResult(`File already exists: ${notePath}`);
+  }
+
+  await app.vault.create(notePath, noteContent);
+
+  return textResult(`Created note: ${notePath}`);
+}
+
+async function handleBatchSuggestLinks(
+  app: App,
+  settings: VaultTreeSettings,
+  args: Record<string, unknown>
+): Promise<ToolCallResult> {
+  const folderPath = args.folder_path as string;
+  const maxSuggestions = typeof args.max_suggestions === "number" ? args.max_suggestions : 5;
+  const minConfidence = typeof args.min_confidence === "number" ? args.min_confidence : 0.5;
+  const shouldApply = args.apply === true;
+  const dryRun = args.dry_run === true;
+  const excludePatterns = (args.exclude_patterns as string[]) || [];
+
+  if (settings.aiProvider === "none") {
+    return errorResult("AI provider not configured. Enable Ollama or OpenAI in plugin settings.");
+  }
+
+  let items;
+  try {
+    items = await collectFilesFromFolder(app, folderPath, { excludePatterns });
+  } catch (error) {
+    return errorResult(error instanceof Error ? error.message : "Unknown error");
+  }
+
+  if (items.length === 0) {
+    return textResult(`No markdown files found in folder: ${folderPath}`);
+  }
+
+  const vaultContext = buildVaultContext(app);
+  const registry = getKnowledgeRegistry();
+  const provider = createAIProvider(settings);
+  registry.registerAIProvider(provider);
+
+  const batchResult = await batchSuggestLinks(app, items, provider, vaultContext, {
+    maxSuggestions,
+    minConfidence,
+  });
+
+  if (!shouldApply) {
+    return textResult(formatBatchResult(batchResult));
+  }
+
+  const applyResult = await batchApplyLinks(app, batchResult, {
+    firstMatchOnly: true,
+    dryRun,
+  });
+
+  return textResult(formatBatchApplyResult(applyResult, dryRun));
 }

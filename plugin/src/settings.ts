@@ -18,6 +18,15 @@ export interface VaultTreeSettings {
   excludeFolders: string[];
   minConfidence: number;
   autoGenerateFrontmatter: boolean;
+  // Knowledge Providers
+  knowledgeDefaultProvider: "wikipedia" | "wikidata" | "wikiart" | "openlibrary" | "musicbrainz" | "dbpedia" | "arxiv" | "shodan" | "github" | "sourceforge" | "defillama" | "auto";
+  shodanApiKey: string;
+  // AI Link Suggestions
+  aiProvider: "none" | "ollama" | "openai";
+  aiApiKey: string;
+  aiApiUrl: string;
+  aiModel: string;
+  ollamaUrl: string;
 }
 
 export const DEFAULT_SETTINGS: VaultTreeSettings = {
@@ -37,6 +46,15 @@ export const DEFAULT_SETTINGS: VaultTreeSettings = {
   excludeFolders: [".obsidian", ".git", "node_modules", "templates"],
   minConfidence: 0.5,
   autoGenerateFrontmatter: true,
+  // Knowledge Providers
+  knowledgeDefaultProvider: "auto",
+  shodanApiKey: "",
+  // AI Link Suggestions
+  aiProvider: "none",
+  aiApiKey: "",
+  aiApiUrl: "https://api.openai.com/v1",
+  aiModel: "gpt-4o-mini",
+  ollamaUrl: "http://localhost:11434",
 };
 
 export class VaultTreeSettingTab extends PluginSettingTab {
@@ -219,5 +237,133 @@ export class VaultTreeSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+
+    // Knowledge Providers
+    containerEl.createEl("h2", { text: "Knowledge Providers" });
+
+    new Setting(containerEl)
+      .setName("Default Provider")
+      .setDesc("Primary source for external knowledge lookups")
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("auto", "Auto (try all)")
+          .addOption("wikipedia", "Wikipedia")
+          .addOption("dbpedia", "DBpedia (structured)")
+          .addOption("wikidata", "Wikidata")
+          .addOption("openlibrary", "OpenLibrary (books)")
+          .addOption("arxiv", "arXiv (papers)")
+          .addOption("github", "GitHub (code)")
+          .addOption("sourceforge", "SourceForge (code)")
+          .addOption("musicbrainz", "MusicBrainz (music)")
+          .addOption("wikiart", "WikiArt (art)")
+          .addOption("defillama", "DefiLlama (DeFi/crypto)")
+          .addOption("shodan", "Shodan (security)")
+          .setValue(this.plugin.settings.knowledgeDefaultProvider)
+          .onChange(async (value) => {
+            this.plugin.settings.knowledgeDefaultProvider = value as typeof this.plugin.settings.knowledgeDefaultProvider;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Shodan API Key")
+      .setDesc("API key for Shodan lookups (get one at shodan.io)")
+      .addText((text) =>
+        text
+          .setPlaceholder("Enter Shodan API key")
+          .setValue(this.plugin.settings.shodanApiKey)
+          .onChange(async (value) => {
+            this.plugin.settings.shodanApiKey = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    // AI Link Suggestions
+    containerEl.createEl("h2", { text: "AI Link Suggestions" });
+
+    new Setting(containerEl)
+      .setName("AI Provider")
+      .setDesc("LLM provider for generating link suggestions")
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("none", "None (disabled)")
+          .addOption("ollama", "Ollama (local)")
+          .addOption("openai", "OpenAI / OpenRouter")
+          .setValue(this.plugin.settings.aiProvider)
+          .onChange(async (value) => {
+            this.plugin.settings.aiProvider = value as typeof this.plugin.settings.aiProvider;
+            await this.plugin.saveSettings();
+            this.display();
+          })
+      );
+
+    if (this.plugin.settings.aiProvider === "ollama") {
+      new Setting(containerEl)
+        .setName("Ollama URL")
+        .setDesc("URL for local Ollama server")
+        .addText((text) =>
+          text
+            .setPlaceholder("http://localhost:11434")
+            .setValue(this.plugin.settings.ollamaUrl)
+            .onChange(async (value) => {
+              this.plugin.settings.ollamaUrl = value || DEFAULT_SETTINGS.ollamaUrl;
+              await this.plugin.saveSettings();
+            })
+        );
+
+      new Setting(containerEl)
+        .setName("Model")
+        .setDesc("Ollama model to use for suggestions")
+        .addText((text) =>
+          text
+            .setPlaceholder("llama3.2")
+            .setValue(this.plugin.settings.aiModel)
+            .onChange(async (value) => {
+              this.plugin.settings.aiModel = value || "llama3.2";
+              await this.plugin.saveSettings();
+            })
+        );
+    }
+
+    if (this.plugin.settings.aiProvider === "openai") {
+      new Setting(containerEl)
+        .setName("API Key")
+        .setDesc("OpenAI or OpenRouter API key")
+        .addText((text) =>
+          text
+            .setPlaceholder("sk-...")
+            .setValue(this.plugin.settings.aiApiKey)
+            .onChange(async (value) => {
+              this.plugin.settings.aiApiKey = value;
+              await this.plugin.saveSettings();
+            })
+        );
+
+      new Setting(containerEl)
+        .setName("API URL")
+        .setDesc("API base URL (use https://openrouter.ai/api/v1 for OpenRouter)")
+        .addText((text) =>
+          text
+            .setPlaceholder("https://api.openai.com/v1")
+            .setValue(this.plugin.settings.aiApiUrl)
+            .onChange(async (value) => {
+              this.plugin.settings.aiApiUrl = value || DEFAULT_SETTINGS.aiApiUrl;
+              await this.plugin.saveSettings();
+            })
+        );
+
+      new Setting(containerEl)
+        .setName("Model")
+        .setDesc("Model to use for suggestions")
+        .addText((text) =>
+          text
+            .setPlaceholder("gpt-4o-mini")
+            .setValue(this.plugin.settings.aiModel)
+            .onChange(async (value) => {
+              this.plugin.settings.aiModel = value || DEFAULT_SETTINGS.aiModel;
+              await this.plugin.saveSettings();
+            })
+        );
+    }
   }
 }

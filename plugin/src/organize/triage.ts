@@ -14,83 +14,79 @@ export async function triageInbox(
   }
 
   const folderStats = await buildFolderStats(app, settings.excludeFolders);
-  const items: TriageItem[] = [];
 
-  for (const child of inboxFolder.children) {
-    if (child instanceof TFile && child.extension === "md") {
-      const suggestion = await suggestPlacement(
-        app,
-        child,
-        folderStats,
-        settings.excludeFolders
-      );
+  const mdFiles = inboxFolder.children.filter(
+    (child): child is TFile => child instanceof TFile && child.extension === "md"
+  );
 
-      items.push({
-        file: child.path,
-        currentFolder: settings.inboxFolder,
-        suggestion,
-        status: "pending",
-      });
-    }
-  }
+  const items = await Promise.all(
+    mdFiles.map(async (file) => ({
+      file: file.path,
+      currentFolder: settings.inboxFolder,
+      suggestion: await suggestPlacement(app, file, folderStats, settings.excludeFolders),
+      status: "pending" as const,
+    }))
+  );
 
-  // Sort by confidence (highest first)
-  items.sort((a, b) => b.suggestion.confidence - a.suggestion.confidence);
-
-  return items;
+  return [...items].sort((a, b) => b.suggestion.confidence - a.suggestion.confidence);
 }
+
+type MoveOutcome = "accepted" | "modified" | "rejected" | "skipped";
+
+const classifyItem = (item: TriageItem): { outcome: MoveOutcome; targetFolder: string | null } => {
+  if (item.status === "pending") {
+    return { outcome: "skipped", targetFolder: null };
+  }
+  if (item.status === "rejected") {
+    return { outcome: "rejected", targetFolder: null };
+  }
+  const targetFolder =
+    item.status === "modified" && item.modifiedFolder
+      ? item.modifiedFolder
+      : item.suggestion.suggestedFolder;
+  if (!targetFolder) {
+    return { outcome: "rejected", targetFolder: null };
+  }
+  return { outcome: item.status as "accepted" | "modified", targetFolder };
+};
+
+const processItem = async (
+  app: App,
+  item: TriageItem
+): Promise<MoveOutcome> => {
+  const { outcome, targetFolder } = classifyItem(item);
+  if (outcome === "skipped" || outcome === "rejected" || !targetFolder) {
+    return outcome;
+  }
+  const file = app.vault.getAbstractFileByPath(item.file);
+  if (!(file instanceof TFile)) {
+    return "rejected";
+  }
+  try {
+    await moveFile(app, file, targetFolder);
+    return outcome;
+  } catch {
+    return "rejected";
+  }
+};
+
+const tallyOutcomes = (outcomes: MoveOutcome[]) =>
+  outcomes.reduce(
+    (acc, outcome) => ({
+      ...acc,
+      processed: acc.processed + (outcome === "skipped" ? 0 : 1),
+      [outcome]: acc[outcome] + 1,
+    }),
+    { processed: 0, accepted: 0, modified: 0, rejected: 0, skipped: 0 }
+  );
 
 export async function applyTriageDecisions(
   app: App,
   items: TriageItem[]
 ): Promise<TriageResult> {
-  const result: TriageResult = {
-    items,
-    processed: 0,
-    accepted: 0,
-    rejected: 0,
-    modified: 0,
-  };
-
-  for (const item of items) {
-    if (item.status === "pending") {
-      continue;
-    }
-
-    result.processed++;
-
-    if (item.status === "rejected") {
-      result.rejected++;
-      continue;
-    }
-
-    const targetFolder =
-      item.status === "modified" && item.modifiedFolder
-        ? item.modifiedFolder
-        : item.suggestion.suggestedFolder;
-
-    if (!targetFolder) {
-      result.rejected++;
-      continue;
-    }
-
-    try {
-      const file = app.vault.getAbstractFileByPath(item.file);
-      if (file instanceof TFile) {
-        await moveFile(app, file, targetFolder);
-
-        if (item.status === "accepted") {
-          result.accepted++;
-        } else {
-          result.modified++;
-        }
-      }
-    } catch {
-      result.rejected++;
-    }
-  }
-
-  return result;
+  const outcomes = await Promise.all(items.map((item) => processItem(app, item)));
+  const { processed, accepted, modified, rejected } = tallyOutcomes(outcomes);
+  return { items, processed, accepted, modified, rejected };
 }
 
 async function moveFile(app: App, file: TFile, targetFolder: string): Promise<void> {
@@ -113,46 +109,43 @@ async function moveFile(app: App, file: TFile, targetFolder: string): Promise<vo
   await app.vault.rename(file, finalPath);
 }
 
+const formatItemSuggestion = (item: TriageItem): string => {
+  const confidence = (item.suggestion.confidence * 100).toFixed(0);
+  const reasons = item.suggestion.reasons.length > 0
+    ? ["Reasons:", ...item.suggestion.reasons.map((r) => `- ${r}`)]
+    : [];
+  const alternatives = item.suggestion.alternativeFolders.length > 0
+    ? [
+        "Alternatives:",
+        ...item.suggestion.alternativeFolders.map(
+          (alt) => `- ${alt.folder} (${(alt.confidence * 100).toFixed(0)}%)`
+        ),
+      ]
+    : [];
+
+  return [
+    `### ${item.file}`,
+    `Suggested: **${item.suggestion.suggestedFolder || "(none)"}** (${confidence}% confidence)`,
+    ...reasons,
+    ...alternatives,
+    "",
+  ].join("\n");
+};
+
 export function formatTriageSuggestions(items: TriageItem[]): string {
-  const lines: string[] = [];
-
-  lines.push(`## Triage Suggestions (${items.length} files)`);
-  lines.push(``);
-
-  for (const item of items) {
-    const confidence = (item.suggestion.confidence * 100).toFixed(0);
-    lines.push(`### ${item.file}`);
-    lines.push(`Suggested: **${item.suggestion.suggestedFolder || "(none)"}** (${confidence}% confidence)`);
-
-    if (item.suggestion.reasons.length > 0) {
-      lines.push(`Reasons:`);
-      for (const reason of item.suggestion.reasons) {
-        lines.push(`- ${reason}`);
-      }
-    }
-
-    if (item.suggestion.alternativeFolders.length > 0) {
-      lines.push(`Alternatives:`);
-      for (const alt of item.suggestion.alternativeFolders) {
-        const altConf = (alt.confidence * 100).toFixed(0);
-        lines.push(`- ${alt.folder} (${altConf}%)`);
-      }
-    }
-
-    lines.push(``);
-  }
-
-  return lines.join("\n");
+  return [
+    `## Triage Suggestions (${items.length} files)`,
+    "",
+    ...items.map(formatItemSuggestion),
+  ].join("\n");
 }
 
 export function formatTriageResult(result: TriageResult): string {
-  const lines: string[] = [];
-
-  lines.push(`## Triage Result`);
-  lines.push(`- Processed: ${result.processed}`);
-  lines.push(`- Accepted: ${result.accepted}`);
-  lines.push(`- Modified: ${result.modified}`);
-  lines.push(`- Rejected: ${result.rejected}`);
-
-  return lines.join("\n");
+  return [
+    "## Triage Result",
+    `- Processed: ${result.processed}`,
+    `- Accepted: ${result.accepted}`,
+    `- Modified: ${result.modified}`,
+    `- Rejected: ${result.rejected}`,
+  ].join("\n");
 }
