@@ -5,6 +5,7 @@ pub mod git;
 pub mod manifest;
 pub mod organizer;
 pub mod scanner;
+pub mod secrets;
 pub mod types;
 
 pub use classifier::{classify_file, ClassificationResult, Classifier, Confidence};
@@ -17,5 +18,9 @@ pub use organizer::{
 };
 pub use scanner::{
     find_duplicates, format_size, scan_directory, scan_files, ScanOptions, ScannedFile,
+};
+pub use secrets::{
+    format_results as format_secrets_results, scan_files_for_secrets, scan_for_secrets,
+    ScanOptions as SecretsScanOptions, SecretType, SensitiveFile, Severity,
 };
 pub use types::{FileType, LibEntry, Topic};

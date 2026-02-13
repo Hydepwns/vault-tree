@@ -4,8 +4,9 @@ use std::path::Path;
 use vault_tree_core::{generate_tree, render_tree, search_vault, SearchOptions, TreeOptions};
 
 use lib_organizer::{
-    classify_file, find_duplicates, format_size, scan_directory, scan_files, Config, FileType,
-    IngestOptions, Manifest, Organizer, ScanOptions, Topic,
+    classify_file, find_duplicates, format_secrets_results, format_size, scan_directory,
+    scan_files, scan_for_secrets, Config, FileType, IngestOptions, Manifest, Organizer,
+    ScanOptions, SecretsScanOptions, Topic,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -204,6 +205,25 @@ pub fn list_tools() -> Vec<ToolDefinition> {
                 "required": ["path"]
             }),
         },
+        ToolDefinition {
+            name: "secrets_scan".to_string(),
+            description: "Scan directories for sensitive files like private keys, passwords, and recovery kits".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "paths": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Directories to scan for secrets"
+                    },
+                    "check_content": {
+                        "type": "boolean",
+                        "description": "Check file contents for secrets (default false)"
+                    }
+                },
+                "required": ["paths"]
+            }),
+        },
     ]
 }
 
@@ -268,6 +288,13 @@ struct LibStatusArgs {
 #[derive(Debug, Deserialize)]
 struct LibInitArgs {
     path: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SecretsScanArgs {
+    paths: Vec<String>,
+    #[serde(default)]
+    check_content: bool,
 }
 
 fn default_true() -> bool {
@@ -635,6 +662,35 @@ pub fn call_tool(name: &str, arguments: Value) -> Result<Value, String> {
                     "type": "text",
                     "text": output
                 }]
+            }))
+        }
+        "secrets_scan" => {
+            let args: SecretsScanArgs = serde_json::from_value(arguments)
+                .map_err(|e| format!("invalid arguments: {}", e))?;
+
+            let options = SecretsScanOptions {
+                check_content: args.check_content,
+                max_file_size: 1024 * 1024,
+                include_hidden: true,
+            };
+
+            let results: Vec<_> = args
+                .paths
+                .iter()
+                .flat_map(|p| scan_for_secrets(Path::new(p), &options))
+                .collect();
+
+            let output = format_secrets_results(&results);
+
+            Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": output
+                }],
+                "metadata": {
+                    "secrets_found": results.len(),
+                    "critical_count": results.iter().filter(|r| r.severity() == lib_organizer::Severity::Critical).count()
+                }
             }))
         }
         _ => Err(format!("unknown tool: {}", name)),

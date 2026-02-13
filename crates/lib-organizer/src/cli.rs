@@ -4,8 +4,8 @@ use indicatif::{ProgressBar, ProgressStyle};
 use std::path::{Path, PathBuf};
 
 use lib_organizer::{
-    classify_file, find_duplicates, format_size, scan_directory, Manifest, Organizer, ScanOptions,
-    Topic,
+    classify_file, find_duplicates, format_secrets_results, format_size, scan_directory,
+    scan_for_secrets, Manifest, Organizer, ScanOptions, SecretsScanOptions, Topic,
 };
 
 #[derive(Parser)]
@@ -64,6 +64,14 @@ enum Commands {
         #[arg(short, long, help = "Library path")]
         library: PathBuf,
     },
+    Secrets {
+        #[arg(help = "Directories to scan for secrets")]
+        dirs: Vec<PathBuf>,
+        #[arg(long, help = "Check file contents for secrets")]
+        content: bool,
+        #[arg(long, help = "Fail with exit code 1 if secrets found")]
+        strict: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -85,6 +93,11 @@ fn main() -> Result<()> {
         } => cmd_ingest(&files, topic, subtopic, compress, &library, copy, message),
         Commands::Search { query, library } => cmd_search(&query, &library),
         Commands::Status { library } => cmd_status(&library),
+        Commands::Secrets {
+            dirs,
+            content,
+            strict,
+        } => cmd_secrets(&dirs, content, strict),
     }
 }
 
@@ -335,6 +348,50 @@ fn cmd_status(library: &Path) -> Result<()> {
 
     for (topic, count) in topics {
         println!("  {}: {}", topic, count);
+    }
+
+    Ok(())
+}
+
+fn cmd_secrets(dirs: &[PathBuf], check_content: bool, strict: bool) -> Result<()> {
+    let dirs = if dirs.is_empty() {
+        vec![std::env::current_dir()?]
+    } else {
+        dirs.to_vec()
+    };
+
+    let options = SecretsScanOptions {
+        check_content,
+        max_file_size: 1024 * 1024,
+        include_hidden: true,
+    };
+
+    let mut all_results = Vec::new();
+
+    for dir in &dirs {
+        println!("Scanning {}...", dir.display());
+        let results = scan_for_secrets(dir, &options);
+        all_results.extend(results);
+    }
+
+    if all_results.is_empty() {
+        println!("\nNo sensitive files detected.");
+        return Ok(());
+    }
+
+    println!("\n{}", format_secrets_results(&all_results));
+
+    let critical_count = all_results
+        .iter()
+        .filter(|r| r.severity() == lib_organizer::Severity::Critical)
+        .count();
+
+    if strict && !all_results.is_empty() {
+        anyhow::bail!(
+            "Found {} sensitive file(s) ({} critical). Use --strict=false to ignore.",
+            all_results.len(),
+            critical_count
+        );
     }
 
     Ok(())
