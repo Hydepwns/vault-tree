@@ -11,83 +11,100 @@ export interface IngestOptions {
   dryRun: boolean;
 }
 
+type ProcessedFile =
+  | { status: "moved"; info: FileInfo }
+  | { status: "duplicate"; info: FileInfo; existingFile: string }
+  | { status: "skipped"; info: FileInfo };
+
+const buildHashLookup = async (
+  app: App,
+  detectDuplicates: boolean
+): Promise<Map<string, string>> => {
+  if (!detectDuplicates) return new Map();
+  const index = await buildHashIndex(app);
+  return new Map(Array.from(index.byHash).map(([hash, files]) => [hash, files[0]]));
+};
+
+const summarizeByCategory = (files: FileInfo[]): Record<FileCategory, number> =>
+  files.reduce(
+    (acc, f) => ({ ...acc, [f.category]: acc[f.category] + 1 }),
+    { markdown: 0, image: 0, pdf: 0, other: 0 }
+  );
+
+const processFile = async (
+  app: App,
+  sourcePath: string,
+  hashIndex: Map<string, string>,
+  options: IngestOptions
+): Promise<ProcessedFile> => {
+  const info = analyzeFile(sourcePath);
+
+  if (options.dryRun) {
+    return { status: "skipped", info };
+  }
+
+  const existingFile = app.vault.getAbstractFileByPath(sourcePath);
+  if (!existingFile || !(existingFile instanceof TFile)) {
+    return { status: "skipped", info };
+  }
+
+  if (options.detectDuplicates) {
+    const hash = await hashFile(app, existingFile);
+    info.hash = hash;
+
+    const existingPath = hashIndex.get(hash);
+    if (existingPath && existingPath !== sourcePath) {
+      return { status: "duplicate", info, existingFile: existingPath };
+    }
+  }
+
+  const targetPath = normalizePath(`${options.targetFolder}/${info.name}`);
+
+  if (targetPath !== sourcePath) {
+    await app.vault.rename(existingFile, targetPath);
+  }
+
+  if (info.category === "markdown" && options.autoGenerateFrontmatter) {
+    const movedFile = app.vault.getAbstractFileByPath(targetPath);
+    if (movedFile instanceof TFile) {
+      await addFrontmatterIfMissing(app, movedFile);
+    }
+  }
+
+  return { status: "moved", info };
+};
+
+const toIngestResult = (results: ProcessedFile[]): IngestResult => {
+  const files = results.map((r) => r.info);
+  const duplicates = results
+    .filter((r): r is Extract<ProcessedFile, { status: "duplicate" }> => r.status === "duplicate")
+    .map((r) => ({ newFile: r.info.path, existingFile: r.existingFile, hash: r.info.hash ?? "" }));
+
+  return {
+    total: files.length,
+    byCategory: summarizeByCategory(files),
+    files,
+    duplicates,
+  };
+};
+
 export async function ingestFiles(
   app: App,
   sourcePaths: string[],
   options: IngestOptions
 ): Promise<IngestResult> {
-  const result: IngestResult = {
-    total: 0,
-    byCategory: { markdown: 0, image: 0, pdf: 0, other: 0 },
-    files: [],
-    duplicates: [],
-  };
+  const hashIndex = await buildHashLookup(app, options.detectDuplicates);
 
-  // Build hash index for duplicate detection
-  let hashIndex: Map<string, string> | null = null;
-  if (options.detectDuplicates) {
-    const index = await buildHashIndex(app);
-    hashIndex = new Map();
-    for (const [hash, files] of index.byHash) {
-      hashIndex.set(hash, files[0]);
-    }
-  }
-
-  // Ensure target folder exists
   if (!options.dryRun) {
     await ensureFolder(app, options.targetFolder);
   }
 
+  const results: ProcessedFile[] = [];
   for (const sourcePath of sourcePaths) {
-    const fileInfo = analyzeFile(sourcePath);
-    result.total++;
-    result.byCategory[fileInfo.category]++;
-    result.files.push(fileInfo);
-
-    if (options.dryRun) {
-      continue;
-    }
-
-    // Read file content (for external files, this would need filesystem access)
-    // For now, we assume files are already in the vault or accessible
-    const existingFile = app.vault.getAbstractFileByPath(sourcePath);
-    if (!existingFile || !(existingFile instanceof TFile)) {
-      continue;
-    }
-
-    // Check for duplicates
-    if (hashIndex && options.detectDuplicates) {
-      const hash = await hashFile(app, existingFile);
-      fileInfo.hash = hash;
-
-      const existingPath = hashIndex.get(hash);
-      if (existingPath && existingPath !== sourcePath) {
-        result.duplicates.push({
-          newFile: sourcePath,
-          existingFile: existingPath,
-          hash,
-        });
-        continue; // Skip duplicates
-      }
-    }
-
-    // Move/copy file to target folder
-    const targetPath = normalizePath(`${options.targetFolder}/${fileInfo.name}`);
-
-    if (targetPath !== sourcePath) {
-      await app.vault.rename(existingFile, targetPath);
-    }
-
-    // Add frontmatter if markdown and missing
-    if (fileInfo.category === "markdown" && options.autoGenerateFrontmatter) {
-      const movedFile = app.vault.getAbstractFileByPath(targetPath);
-      if (movedFile instanceof TFile) {
-        await addFrontmatterIfMissing(app, movedFile);
-      }
-    }
+    results.push(await processFile(app, sourcePath, hashIndex, options));
   }
 
-  return result;
+  return toIngestResult(results);
 }
 
 export async function scanExternalDirectory(
@@ -100,49 +117,61 @@ export async function scanExternalDirectory(
   return [];
 }
 
+type ImportResult = "imported" | "skipped";
+
+const importSingleFile = async (
+  app: App,
+  fileInfo: FileInfo,
+  targetFolder: string,
+  autoGenerateFrontmatter: boolean
+): Promise<ImportResult> => {
+  try {
+    const targetPath = normalizePath(`${targetFolder}/${fileInfo.name}`);
+
+    if (app.vault.getAbstractFileByPath(targetPath)) {
+      return "skipped";
+    }
+
+    const existingFile = app.vault.getAbstractFileByPath(fileInfo.path);
+    if (!(existingFile instanceof TFile)) {
+      return "skipped";
+    }
+
+    await app.vault.rename(existingFile, targetPath);
+
+    if (fileInfo.category === "markdown" && autoGenerateFrontmatter) {
+      const movedFile = app.vault.getAbstractFileByPath(targetPath);
+      if (movedFile instanceof TFile) {
+        await addFrontmatterIfMissing(app, movedFile);
+      }
+    }
+
+    return "imported";
+  } catch (error) {
+    console.warn(`[ingest] Failed to import ${fileInfo.path}:`, error);
+    return "skipped";
+  }
+};
+
+const countResults = (results: ImportResult[]): { imported: number; skipped: number } => ({
+  imported: results.filter((r) => r === "imported").length,
+  skipped: results.filter((r) => r === "skipped").length,
+});
+
 export async function importToVault(
   app: App,
   files: FileInfo[],
   targetFolder: string,
   options: { autoGenerateFrontmatter: boolean }
 ): Promise<{ imported: number; skipped: number }> {
-  let imported = 0;
-  let skipped = 0;
-
   await ensureFolder(app, targetFolder);
 
+  const results: ImportResult[] = [];
   for (const fileInfo of files) {
-    try {
-      const targetPath = normalizePath(`${targetFolder}/${fileInfo.name}`);
-
-      // Check if file already exists
-      if (app.vault.getAbstractFileByPath(targetPath)) {
-        skipped++;
-        continue;
-      }
-
-      // For files already in vault, move them
-      const existingFile = app.vault.getAbstractFileByPath(fileInfo.path);
-      if (existingFile instanceof TFile) {
-        await app.vault.rename(existingFile, targetPath);
-
-        if (fileInfo.category === "markdown" && options.autoGenerateFrontmatter) {
-          const movedFile = app.vault.getAbstractFileByPath(targetPath);
-          if (movedFile instanceof TFile) {
-            await addFrontmatterIfMissing(app, movedFile);
-          }
-        }
-
-        imported++;
-      } else {
-        skipped++;
-      }
-    } catch {
-      skipped++;
-    }
+    results.push(await importSingleFile(app, fileInfo, targetFolder, options.autoGenerateFrontmatter));
   }
 
-  return { imported, skipped };
+  return countResults(results);
 }
 
 function analyzeFile(path: string): FileInfo {
@@ -204,24 +233,25 @@ slug: ${slug}
 }
 
 export function formatIngestResult(result: IngestResult): string {
-  const lines: string[] = [];
+  const header = [
+    `## Ingest Summary`,
+    `Total files: ${result.total}`,
+    ``,
+    `### By Category`,
+    `- Markdown: ${result.byCategory.markdown}`,
+    `- Images: ${result.byCategory.image}`,
+    `- PDFs: ${result.byCategory.pdf}`,
+    `- Other: ${result.byCategory.other}`,
+  ];
 
-  lines.push(`## Ingest Summary`);
-  lines.push(`Total files: ${result.total}`);
-  lines.push(``);
-  lines.push(`### By Category`);
-  lines.push(`- Markdown: ${result.byCategory.markdown}`);
-  lines.push(`- Images: ${result.byCategory.image}`);
-  lines.push(`- PDFs: ${result.byCategory.pdf}`);
-  lines.push(`- Other: ${result.byCategory.other}`);
+  const duplicatesSection =
+    result.duplicates.length > 0
+      ? [
+          ``,
+          `### Duplicates Found (${result.duplicates.length})`,
+          ...result.duplicates.map((d) => `- ${d.newFile} -> ${d.existingFile}`),
+        ]
+      : [];
 
-  if (result.duplicates.length > 0) {
-    lines.push(``);
-    lines.push(`### Duplicates Found (${result.duplicates.length})`);
-    for (const dup of result.duplicates) {
-      lines.push(`- ${dup.newFile} -> ${dup.existingFile}`);
-    }
-  }
-
-  return lines.join("\n");
+  return [...header, ...duplicatesSection].join("\n");
 }

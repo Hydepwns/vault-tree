@@ -26,53 +26,46 @@ export async function hashContent(content: string): Promise<string> {
   return simpleHash(bytes);
 }
 
-function simpleHash(bytes: Uint8Array): string {
-  // Simple FNV-1a hash as fallback
-  let hash = 2166136261;
-  for (let i = 0; i < bytes.length; i++) {
-    hash ^= bytes[i];
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
-}
+const fnv1a = (bytes: Uint8Array): number =>
+  bytes.reduce((hash, byte) => Math.imul(hash ^ byte, 16777619), 2166136261);
+
+const simpleHash = (bytes: Uint8Array): string =>
+  (fnv1a(bytes) >>> 0).toString(16).padStart(8, "0");
 
 export interface HashIndex {
   byHash: Map<string, string[]>;
   byFile: Map<string, string>;
 }
 
-export async function buildHashIndex(app: App): Promise<HashIndex> {
-  const index: HashIndex = {
-    byHash: new Map(),
-    byFile: new Map(),
-  };
+type FileHash = { path: string; hash: string };
 
+const safeHashFile = async (app: App, file: TFile): Promise<FileHash | null> => {
+  try {
+    const hash = await hashFile(app, file);
+    return { path: file.path, hash };
+  } catch (error) {
+    console.warn(`[fingerprint] Failed to hash ${file.path}:`, error);
+    return null;
+  }
+};
+
+export async function buildHashIndex(app: App): Promise<HashIndex> {
   const files = app.vault.getMarkdownFiles();
 
-  for (const file of files) {
-    try {
-      const hash = await hashFile(app, file);
-      index.byFile.set(file.path, hash);
+  const results = await Promise.all(files.map((f) => safeHashFile(app, f)));
+  const validResults = results.filter((r): r is FileHash => r !== null);
 
-      const existing = index.byHash.get(hash) || [];
-      existing.push(file.path);
-      index.byHash.set(hash, existing);
-    } catch {
-      // Skip files that can't be hashed
-    }
-  }
-
-  return index;
+  return validResults.reduce<HashIndex>(
+    (index, { path, hash }) => ({
+      byFile: new Map(index.byFile).set(path, hash),
+      byHash: new Map(index.byHash).set(hash, [...(index.byHash.get(hash) ?? []), path]),
+    }),
+    { byFile: new Map(), byHash: new Map() }
+  );
 }
 
 export function findDuplicates(index: HashIndex): Map<string, string[]> {
-  const duplicates = new Map<string, string[]>();
-
-  for (const [hash, files] of index.byHash) {
-    if (files.length > 1) {
-      duplicates.set(hash, files);
-    }
-  }
-
-  return duplicates;
+  return new Map(
+    Array.from(index.byHash.entries()).filter(([, files]) => files.length > 1)
+  );
 }

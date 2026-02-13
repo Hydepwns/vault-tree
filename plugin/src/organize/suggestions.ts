@@ -2,6 +2,93 @@ import { App, TFile, TFolder } from "obsidian";
 import type { PlacementSuggestion, FolderStats } from "./types";
 import { extractTags, extractKeywords } from "../utils/metadata";
 
+type ScoredFolder = { folder: string; score: number; reasons: string[] };
+
+type ScoringContext = {
+  app: App;
+  fileKeywords: Record<string, number>;
+  fileTags: string[];
+  fileLinks: string[];
+  fileName: string;
+};
+
+type ScoringFactor = {
+  weight: number;
+  calculate: (stats: FolderStats, ctx: ScoringContext) => number;
+  describe: (rawScore: number) => string;
+};
+
+const scoringFactors: ScoringFactor[] = [
+  {
+    weight: 0.4,
+    calculate: (stats, ctx) => calculateKeywordOverlap(ctx.fileKeywords, stats.keywords),
+    describe: (s) => `Keywords match: ${(s * 100).toFixed(0)}%`,
+  },
+  {
+    weight: 0.3,
+    calculate: (stats, ctx) => calculateTagOverlap(ctx.fileTags, stats.tags),
+    describe: (s) => `Tags match: ${(s * 100).toFixed(0)}%`,
+  },
+  {
+    weight: 0.3,
+    calculate: (stats, ctx) => calculateLinkScore(ctx.app, ctx.fileLinks, stats.path),
+    describe: (s) => `Links to ${Math.round(s * 10)} notes in folder`,
+  },
+  {
+    weight: 0.2,
+    calculate: (stats, ctx) => calculateFolderNameMatch(ctx.fileName, stats.path),
+    describe: () => `Folder name relevant`,
+  },
+];
+
+const scoreFolder = (stats: FolderStats, ctx: ScoringContext): ScoredFolder => {
+  const contributions = scoringFactors
+    .map((factor) => {
+      const rawScore = factor.calculate(stats, ctx);
+      return { rawScore, weighted: rawScore * factor.weight, describe: factor.describe };
+    })
+    .filter(({ rawScore }) => rawScore > 0);
+
+  return {
+    folder: stats.path,
+    score: contributions.reduce((sum, c) => sum + c.weighted, 0),
+    reasons: contributions.map((c) => c.describe(c.rawScore)),
+  };
+};
+
+const isCandidate = (
+  stats: FolderStats,
+  excludeFolders: string[],
+  currentPath: string | undefined
+): boolean =>
+  !excludeFolders.some((ex) => stats.path.startsWith(ex)) &&
+  stats.path !== currentPath;
+
+const noSuggestion = (filePath: string): PlacementSuggestion => ({
+  file: filePath,
+  suggestedFolder: "",
+  confidence: 0,
+  reasons: ["No suitable folder found"],
+  alternativeFolders: [],
+});
+
+const toPlacementSuggestion = (
+  filePath: string,
+  [best, ...alternatives]: ScoredFolder[]
+): PlacementSuggestion =>
+  best
+    ? {
+        file: filePath,
+        suggestedFolder: best.folder,
+        confidence: Math.min(best.score, 1),
+        reasons: best.reasons,
+        alternativeFolders: alternatives.slice(0, 3).map((a) => ({
+          folder: a.folder,
+          confidence: Math.min(a.score, 1),
+        })),
+      }
+    : noSuggestion(filePath);
+
 export async function suggestPlacement(
   app: App,
   file: TFile,
@@ -9,154 +96,104 @@ export async function suggestPlacement(
   excludeFolders: string[]
 ): Promise<PlacementSuggestion> {
   const content = await app.vault.cachedRead(file);
-  const fileKeywords = extractKeywords(content);
-  const fileTags = extractTags(content);
-  const fileLinks = extractLinkTargets(content);
 
-  const scores: Array<{ folder: string; score: number; reasons: string[] }> = [];
-
-  for (const stats of folderStats) {
-    if (excludeFolders.some((ex) => stats.path.startsWith(ex))) {
-      continue;
-    }
-
-    if (stats.path === file.parent?.path) {
-      continue; // Skip current folder
-    }
-
-    const reasons: string[] = [];
-    let score = 0;
-
-    // Keyword matching
-    const keywordScore = calculateKeywordOverlap(fileKeywords, stats.keywords);
-    if (keywordScore > 0) {
-      score += keywordScore * 0.4;
-      reasons.push(`Keywords match: ${(keywordScore * 100).toFixed(0)}%`);
-    }
-
-    // Tag matching
-    const tagScore = calculateTagOverlap(fileTags, stats.tags);
-    if (tagScore > 0) {
-      score += tagScore * 0.3;
-      reasons.push(`Tags match: ${(tagScore * 100).toFixed(0)}%`);
-    }
-
-    // Link matching - check if file links to notes in this folder
-    const linkScore = calculateLinkScore(app, fileLinks, stats.path);
-    if (linkScore > 0) {
-      score += linkScore * 0.3;
-      reasons.push(`Links to ${Math.round(linkScore * 10)} notes in folder`);
-    }
-
-    // Folder name matching
-    const folderNameScore = calculateFolderNameMatch(file.basename, stats.path);
-    if (folderNameScore > 0) {
-      score += folderNameScore * 0.2;
-      reasons.push(`Folder name relevant`);
-    }
-
-    if (score > 0) {
-      scores.push({ folder: stats.path, score, reasons });
-    }
-  }
-
-  // Sort by score descending
-  scores.sort((a, b) => b.score - a.score);
-
-  const best = scores[0];
-  const alternatives = scores.slice(1, 4);
-
-  if (!best) {
-    return {
-      file: file.path,
-      suggestedFolder: "",
-      confidence: 0,
-      reasons: ["No suitable folder found"],
-      alternativeFolders: [],
-    };
-  }
-
-  return {
-    file: file.path,
-    suggestedFolder: best.folder,
-    confidence: Math.min(best.score, 1),
-    reasons: best.reasons,
-    alternativeFolders: alternatives.map((a) => ({
-      folder: a.folder,
-      confidence: Math.min(a.score, 1),
-    })),
+  const ctx: ScoringContext = {
+    app,
+    fileKeywords: extractKeywords(content),
+    fileTags: extractTags(content),
+    fileLinks: extractLinkTargets(content),
+    fileName: file.basename,
   };
+
+  const scored = folderStats
+    .filter((stats) => isCandidate(stats, excludeFolders, file.parent?.path))
+    .map((stats) => scoreFolder(stats, ctx))
+    .filter((s) => s.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  return toPlacementSuggestion(file.path, scored);
 }
 
 export async function buildFolderStats(
   app: App,
   excludeFolders: string[]
 ): Promise<FolderStats[]> {
-  const stats: FolderStats[] = [];
   const folders = getAllFolders(app);
 
-  for (const folder of folders) {
-    if (excludeFolders.some((ex) => folder.path.startsWith(ex))) {
-      continue;
-    }
+  const filtered = folders.filter(
+    (folder) => !excludeFolders.some((ex) => folder.path.startsWith(ex))
+  );
 
-    const folderStat = await analyzeFolderContent(app, folder);
-    if (folderStat.noteCount > 0) {
-      stats.push(folderStat);
-    }
-  }
+  const analyzed = await Promise.all(
+    filtered.map((folder) => analyzeFolderContent(app, folder))
+  );
 
-  return stats;
+  return analyzed.filter((stats) => stats.noteCount > 0);
 }
+
+const collectFolders = (folder: TFolder): TFolder[] => [
+  folder,
+  ...folder.children
+    .filter((child): child is TFolder => child instanceof TFolder)
+    .flatMap(collectFolders),
+];
 
 function getAllFolders(app: App): TFolder[] {
-  const folders: TFolder[] = [];
-
-  function collect(folder: TFolder) {
-    folders.push(folder);
-    for (const child of folder.children) {
-      if (child instanceof TFolder) {
-        collect(child);
-      }
-    }
-  }
-
-  collect(app.vault.getRoot());
-  return folders;
+  return collectFolders(app.vault.getRoot());
 }
 
-async function analyzeFolderContent(app: App, folder: TFolder): Promise<FolderStats> {
-  const tags: Record<string, number> = {};
-  const keywords: Record<string, number> = {};
-  let noteCount = 0;
+type ContentAnalysis = {
+  tags: Record<string, number>;
+  keywords: Record<string, number>;
+};
 
-  for (const child of folder.children) {
-    if (child instanceof TFile && child.extension === "md") {
-      noteCount++;
+const toFrequencyMap = (items: string[]): Record<string, number> =>
+  items.reduce<Record<string, number>>(
+    (acc, item) => ({ ...acc, [item]: (acc[item] ?? 0) + 1 }),
+    {}
+  );
 
-      try {
-        const content = await app.vault.cachedRead(child);
+const mergeFrequencyMap = (
+  a: Record<string, number>,
+  b: Record<string, number>
+): Record<string, number> =>
+  Object.entries(b).reduce((acc, [k, v]) => ({ ...acc, [k]: (acc[k] ?? 0) + v }), a);
 
-        // Extract tags
-        for (const tag of extractTags(content)) {
-          tags[tag] = (tags[tag] || 0) + 1;
-        }
+const mergeAnalysis = (a: ContentAnalysis, b: ContentAnalysis): ContentAnalysis => ({
+  tags: mergeFrequencyMap(a.tags, b.tags),
+  keywords: mergeFrequencyMap(a.keywords, b.keywords),
+});
 
-        // Extract keywords
-        for (const [keyword, count] of Object.entries(extractKeywords(content))) {
-          keywords[keyword] = (keywords[keyword] || 0) + count;
-        }
-      } catch {
-        // Skip files that can't be read
-      }
-    }
+const analyzeContent = (content: string): ContentAnalysis => ({
+  tags: toFrequencyMap(extractTags(content)),
+  keywords: extractKeywords(content),
+});
+
+const safeRead = async (app: App, file: TFile): Promise<string | null> => {
+  try {
+    return await app.vault.cachedRead(file);
+  } catch (error) {
+    console.warn(`[suggestions] Failed to read ${file.path}:`, error);
+    return null;
   }
+};
+
+async function analyzeFolderContent(app: App, folder: TFolder): Promise<FolderStats> {
+  const mdFiles = folder.children.filter(
+    (child): child is TFile => child instanceof TFile && child.extension === "md"
+  );
+
+  const contents = await Promise.all(mdFiles.map((f) => safeRead(app, f)));
+  const validContents = contents.filter((c): c is string => c !== null);
+
+  const combined = validContents
+    .map(analyzeContent)
+    .reduce(mergeAnalysis, { tags: {}, keywords: {} });
 
   return {
     path: folder.path,
-    noteCount,
-    tags,
-    keywords,
+    noteCount: mdFiles.length,
+    ...combined,
   };
 }
 
@@ -170,22 +207,20 @@ function calculateKeywordOverlap(
   fileKeywords: Record<string, number>,
   folderKeywords: Record<string, number>
 ): number {
-  const fileKeys = Object.keys(fileKeywords);
+  const fileEntries = Object.entries(fileKeywords);
   const folderKeys = new Set(Object.keys(folderKeywords));
 
-  if (fileKeys.length === 0 || folderKeys.size === 0) {
+  if (fileEntries.length === 0 || folderKeys.size === 0) {
     return 0;
   }
 
-  let overlap = 0;
-  let total = 0;
-
-  for (const key of fileKeys) {
-    total += fileKeywords[key];
-    if (folderKeys.has(key)) {
-      overlap += fileKeywords[key];
-    }
-  }
+  const { overlap, total } = fileEntries.reduce(
+    (acc, [key, count]) => ({
+      total: acc.total + count,
+      overlap: acc.overlap + (folderKeys.has(key) ? count : 0),
+    }),
+    { overlap: 0, total: 0 }
+  );
 
   return total > 0 ? overlap / total : 0;
 }
@@ -205,16 +240,12 @@ function calculateTagOverlap(
 }
 
 function calculateLinkScore(app: App, linkTargets: string[], folderPath: string): number {
-  let matches = 0;
-
-  for (const target of linkTargets) {
+  const matches = linkTargets.filter((target) => {
     const file = app.metadataCache.getFirstLinkpathDest(target, "");
-    if (file && file.parent?.path === folderPath) {
-      matches++;
-    }
-  }
+    return file?.parent?.path === folderPath;
+  }).length;
 
-  return matches / 10; // Normalize
+  return matches / 10;
 }
 
 function calculateFolderNameMatch(fileName: string, folderPath: string): number {
