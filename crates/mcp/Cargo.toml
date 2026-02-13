@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 vault-tree-core = { path = "../core" }
+lib-organizer = { path = "../lib-organizer" }
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true

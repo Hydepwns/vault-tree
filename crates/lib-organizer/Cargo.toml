@@ -1,0 +1,46 @@
+[package]
+name = "lib-organizer"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Library organizer for books and manuals with BLAKE3 deduplication"
+
+[[bin]]
+name = "lib-organizer"
+path = "src/cli.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+vault-tree-core = { path = "../core" }
+serde.workspace = true
+serde_json.workspace = true
+walkdir.workspace = true
+rayon.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+blake3.workspace = true
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Git
+git2 = "0.19"
+
+# Compression
+zstd = "0.13"
+
+# Metadata extraction
+lopdf = "0.34"
+epub = "2"
+
+# Progress display
+indicatif = "0.17"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+tempfile = "3"
