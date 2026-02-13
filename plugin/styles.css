@@ -1,0 +1,253 @@
+/* Tree Modal */
+.vault-tree-output {
+  max-height: 60vh;
+  overflow: auto;
+  background-color: var(--background-secondary);
+  padding: 1em;
+  border-radius: 4px;
+  font-family: var(--font-monospace);
+  font-size: 0.85em;
+  white-space: pre;
+}
+
+.vault-tree-buttons {
+  display: flex;
+  gap: 0.5em;
+  margin-top: 1em;
+  justify-content: flex-end;
+}
+
+.vault-tree-buttons button {
+  padding: 0.5em 1em;
+}
+
+/* Publish Modal */
+.vault-tree-publish-modal {
+  max-width: 600px;
+}
+
+.vault-tree-publish-modal h2 {
+  margin-bottom: 1em;
+}
+
+.vault-tree-publish-modal h3 {
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+  font-size: 1em;
+  color: var(--text-muted);
+}
+
+.publish-file-info {
+  padding: 0.5em;
+  background-color: var(--background-secondary);
+  border-radius: 4px;
+  margin-bottom: 1em;
+}
+
+.publish-file-info p {
+  margin: 0;
+  font-family: var(--font-monospace);
+  font-size: 0.9em;
+}
+
+.publish-stats {
+  display: flex;
+  gap: 0.5em;
+  font-size: 0.9em;
+  color: var(--text-muted);
+  margin-bottom: 1em;
+}
+
+.publish-errors,
+.publish-warnings {
+  padding: 0.75em;
+  border-radius: 4px;
+  margin-bottom: 1em;
+}
+
+.publish-errors {
+  background-color: rgba(var(--color-red-rgb), 0.1);
+  border-left: 3px solid var(--color-red);
+}
+
+.publish-warnings {
+  background-color: rgba(var(--color-yellow-rgb), 0.1);
+  border-left: 3px solid var(--color-yellow);
+}
+
+.publish-error {
+  color: var(--color-red);
+  margin: 0.25em 0;
+}
+
+.publish-warning {
+  color: var(--color-yellow);
+  margin: 0.25em 0;
+}
+
+.publish-metadata .setting-item {
+  border-top: none;
+  padding-top: 0.5em;
+}
+
+.publish-metadata textarea {
+  min-height: 60px;
+  width: 100%;
+}
+
+.publish-buttons {
+  display: flex;
+  gap: 0.5em;
+  margin-top: 1.5em;
+  justify-content: flex-end;
+  padding-top: 1em;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.publish-buttons button {
+  padding: 0.5em 1.5em;
+}
+
+/* Confirm Modal */
+.modal-button-container {
+  display: flex;
+  gap: 0.5em;
+  margin-top: 1.5em;
+  justify-content: flex-end;
+}
+
+/* Triage Modal */
+.vault-tree-triage-modal {
+  max-width: 700px;
+  width: 90vw;
+}
+
+.vault-tree-triage-modal h2 {
+  margin-bottom: 1em;
+}
+
+.triage-loading {
+  text-align: center;
+  padding: 2em;
+  color: var(--text-muted);
+}
+
+.triage-summary {
+  padding: 0.75em;
+  background-color: var(--background-secondary);
+  border-radius: 4px;
+  margin-bottom: 1em;
+}
+
+.triage-summary p {
+  margin: 0;
+}
+
+.triage-actions {
+  display: flex;
+  gap: 0.5em;
+  margin-bottom: 1em;
+}
+
+.triage-actions button {
+  padding: 0.25em 0.75em;
+  font-size: 0.9em;
+}
+
+.triage-items {
+  max-height: 50vh;
+  overflow-y: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+}
+
+.triage-item {
+  padding: 1em;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.triage-item:last-child {
+  border-bottom: none;
+}
+
+.triage-item h4 {
+  margin: 0 0 0.5em 0;
+  font-size: 1em;
+}
+
+.triage-pending {
+  background-color: var(--background-primary);
+}
+
+.triage-accepted {
+  background-color: rgba(var(--color-green-rgb), 0.1);
+}
+
+.triage-rejected {
+  background-color: rgba(var(--color-red-rgb), 0.05);
+}
+
+.triage-modified {
+  background-color: rgba(var(--color-yellow-rgb), 0.1);
+}
+
+.triage-suggestion {
+  font-size: 0.9em;
+  margin-bottom: 0.5em;
+}
+
+.triage-no-suggestion {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.triage-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25em;
+  margin-bottom: 0.75em;
+}
+
+.triage-reason {
+  font-size: 0.8em;
+  padding: 0.15em 0.5em;
+  background-color: var(--background-secondary);
+  border-radius: 3px;
+  color: var(--text-muted);
+}
+
+.triage-controls {
+  display: flex;
+  gap: 0.5em;
+  align-items: center;
+}
+
+.triage-controls button {
+  padding: 0.25em 0.75em;
+  font-size: 0.85em;
+}
+
+.triage-controls button.is-active {
+  background-color: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+.triage-controls select {
+  padding: 0.25em;
+  font-size: 0.85em;
+  flex-grow: 1;
+  max-width: 200px;
+}
+
+.triage-buttons {
+  display: flex;
+  gap: 0.5em;
+  margin-top: 1em;
+  justify-content: flex-end;
+  padding-top: 1em;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.triage-buttons button {
+  padding: 0.5em 1.5em;
+}

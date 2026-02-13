@@ -1,0 +1,6 @@
+target/
+node_modules/
+.DS_Store
+*.log
+plugin/main.js
+plugin/wasm/vault_tree_wasm_inline.js

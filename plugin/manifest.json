@@ -1,0 +1,9 @@
+{
+  "id": "vault-tree",
+  "name": "Vault Tree",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "author": "droo",
+  "description": "Vault-aware tree for Claude Code with MCP server support",
+  "isDesktopOnly": true
+}

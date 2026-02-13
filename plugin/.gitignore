@@ -1,0 +1,5 @@
+node_modules/
+main.js
+*.js.map
+wasm/vault_tree_wasm_inline.js
+.DS_Store

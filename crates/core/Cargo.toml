@@ -1,0 +1,23 @@
+[package]
+name = "vault-tree-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Core library for vault-tree: markdown vault parsing and analysis"
+
+[lib]
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+walkdir.workspace = true
+regex.workspace = true
+blake3.workspace = true
+rayon.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
