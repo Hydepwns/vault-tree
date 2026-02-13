@@ -66,9 +66,12 @@ fn default_topics() -> Vec<Topic> {
     [
         "programming",
         "electronics",
+        "crypto",
+        "research",
         "philosophy",
         "mathematics",
         "science",
+        "security",
         "manuals",
         "reference",
         "other",
@@ -164,6 +167,89 @@ fn default_keyword_rules() -> HashMap<String, Topic> {
                 "neuroscience",
             ],
         ),
+        (
+            "crypto",
+            &[
+                "bitcoin",
+                "ethereum",
+                "blockchain",
+                "crypto",
+                "cryptocurrency",
+                "defi",
+                "nft",
+                "token",
+                "wallet",
+                "consensus",
+                "staking",
+                "validator",
+                "solidity",
+                "smartcontract",
+                "web3",
+                "dapp",
+                "dao",
+                "amm",
+                "uniswap",
+                "aave",
+                "lido",
+                "eigenlayer",
+                "rollup",
+                "zk",
+                "zkp",
+                "snark",
+                "stark",
+                "merkle",
+                "hash",
+                "evm",
+                "cosmos",
+                "polkadot",
+                "solana",
+                "avalanche",
+                "arbitrum",
+                "optimism",
+                "layer2",
+                "bridge",
+                "oracle",
+                "chainlink",
+                "whitepaper",
+            ],
+        ),
+        (
+            "security",
+            &[
+                "security",
+                "cybersecurity",
+                "hacking",
+                "penetration",
+                "pentest",
+                "exploit",
+                "vulnerability",
+                "malware",
+                "forensics",
+                "incident",
+                "redteam",
+                "blueteam",
+                "audit",
+                "encryption",
+                "cryptography",
+            ],
+        ),
+        (
+            "research",
+            &[
+                "arxiv",
+                "paper",
+                "thesis",
+                "dissertation",
+                "journal",
+                "conference",
+                "proceedings",
+                "preprint",
+                "manuscript",
+                "survey",
+                "review",
+                "abstract",
+            ],
+        ),
     ];
 
     topic_keywords
@@ -217,5 +303,10 @@ mod tests {
         assert_eq!(rules.get("plato"), Some(&Topic::new("philosophy")));
         assert_eq!(rules.get("calculus"), Some(&Topic::new("mathematics")));
         assert_eq!(rules.get("quantum"), Some(&Topic::new("science")));
+        assert_eq!(rules.get("bitcoin"), Some(&Topic::new("crypto")));
+        assert_eq!(rules.get("ethereum"), Some(&Topic::new("crypto")));
+        assert_eq!(rules.get("eigenlayer"), Some(&Topic::new("crypto")));
+        assert_eq!(rules.get("cybersecurity"), Some(&Topic::new("security")));
+        assert_eq!(rules.get("pentest"), Some(&Topic::new("security")));
     }
 }

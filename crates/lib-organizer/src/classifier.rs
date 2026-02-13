@@ -4,6 +4,38 @@ use std::path::Path;
 use crate::config::Config;
 use crate::types::{FileMetadata, FileType, Topic};
 
+/// Split a string on camelCase and PascalCase boundaries.
+/// "eigenlayerWhitepaper" -> ["eigenlayer", "Whitepaper"]
+/// "PDFDocument" -> ["PDF", "Document"]
+fn split_camel_case(s: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+
+    let chars: Vec<char> = s.chars().collect();
+    for (i, &c) in chars.iter().enumerate() {
+        let next_is_lower = chars.get(i + 1).map(|n| n.is_lowercase()).unwrap_or(false);
+
+        if c.is_uppercase() && !current.is_empty() {
+            // Start new word if: lowercase->uppercase OR uppercase->uppercase followed by lowercase
+            let prev_is_lower = current
+                .chars()
+                .last()
+                .map(|p| p.is_lowercase())
+                .unwrap_or(false);
+            if prev_is_lower || next_is_lower {
+                words.push(std::mem::take(&mut current));
+            }
+        }
+        current.push(c);
+    }
+
+    if !current.is_empty() {
+        words.push(current);
+    }
+
+    words
+}
+
 #[derive(Debug, Clone)]
 pub struct ClassificationResult {
     pub topic: Topic,
@@ -49,11 +81,13 @@ impl RuleBasedClassifier {
         path.file_stem()
             .and_then(|s| s.to_str())
             .map(|name| {
-                name.to_lowercase()
-                    .replace(|c: char| !c.is_alphanumeric(), " ")
+                // First split on non-alphanumeric chars
+                name.replace(|c: char| !c.is_alphanumeric(), " ")
                     .split_whitespace()
+                    // Then split each word on camelCase boundaries
+                    .flat_map(split_camel_case)
+                    .map(|s| s.to_lowercase())
                     .filter(|w| w.len() > 2)
-                    .map(String::from)
                     .collect()
             })
             .unwrap_or_default()
@@ -284,5 +318,58 @@ mod tests {
         assert_eq!(Confidence::from_match_count(1), Confidence::Medium);
         assert_eq!(Confidence::from_match_count(2), Confidence::High);
         assert_eq!(Confidence::from_match_count(10), Confidence::High);
+    }
+
+    #[test]
+    fn split_camel_case_works() {
+        assert_eq!(
+            split_camel_case("eigenlayerWhitepaper"),
+            vec!["eigenlayer", "Whitepaper"]
+        );
+        assert_eq!(split_camel_case("BitcoinCore"), vec!["Bitcoin", "Core"]);
+        assert_eq!(split_camel_case("PDFDocument"), vec!["PDF", "Document"]);
+        assert_eq!(split_camel_case("simpleword"), vec!["simpleword"]);
+        // Consecutive uppercase splits before the last uppercase before lowercase
+        assert_eq!(split_camel_case("ABCdef"), vec!["AB", "Cdef"]);
+    }
+
+    #[test]
+    fn camel_case_filename_extracts_keywords() {
+        let config = Config::new("/lib");
+        let classifier = RuleBasedClassifier::new(&config);
+
+        let keywords = classifier
+            .extract_keywords_from_filename(Path::new("/path/to/eigenlayerWhitepaper.pdf"));
+
+        assert!(keywords.contains(&"eigenlayer".to_string()));
+        assert!(keywords.contains(&"whitepaper".to_string()));
+    }
+
+    #[test]
+    fn classify_arxiv_paper() {
+        let config = Config::new("/lib");
+        let result = classify_file(
+            Path::new("/path/to/2309.04269-arxiv-paper.pdf"),
+            FileType::Pdf,
+            &config,
+        )
+        .unwrap();
+
+        assert_eq!(result.topic, Topic::new("research"));
+        assert!(result.matched_keywords.contains(&"arxiv".to_string()));
+    }
+
+    #[test]
+    fn classify_crypto_camel_case() {
+        let config = Config::new("/lib");
+        let result = classify_file(
+            Path::new("/path/to/eigenlayerWhitepaper.pdf"),
+            FileType::Pdf,
+            &config,
+        )
+        .unwrap();
+
+        assert_eq!(result.topic, Topic::new("crypto"));
+        assert!(result.matched_keywords.contains(&"eigenlayer".to_string()));
     }
 }
