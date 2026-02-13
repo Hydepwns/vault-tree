@@ -1444,6 +1444,7 @@ dependencies = [
  "lib-organizer",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "vault-tree-core",
 ]

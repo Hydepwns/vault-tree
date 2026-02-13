@@ -1,11 +1,6 @@
 use anyhow::Result;
 use std::io::{self, BufRead, Write};
-
-mod server;
-mod tools;
-mod transport;
-
-use server::McpServer;
+use vault_tree_mcp::server::McpServer;
 
 fn main() -> Result<()> {
     let mut server = McpServer::new();
