@@ -5,6 +5,7 @@ pub mod git;
 pub mod manifest;
 pub mod organizer;
 pub mod scanner;
+pub mod search;
 pub mod secrets;
 pub mod types;
 
@@ -18,6 +19,10 @@ pub use organizer::{
 };
 pub use scanner::{
     find_duplicates, format_size, scan_directory, scan_files, ScanOptions, ScannedFile,
+};
+pub use search::{
+    extract_epub_text, extract_parallel, extract_pdf_text, format_search_results, ExtractedText,
+    ExtractionJob, ExtractionResult, IndexStats, SearchIndex, SearchOptions, SearchResult,
 };
 pub use secrets::{
     format_results as format_secrets_results, scan_files_for_secrets, scan_for_secrets,

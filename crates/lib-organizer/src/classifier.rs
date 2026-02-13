@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::path::Path;
 
 use crate::config::Config;
@@ -59,6 +60,16 @@ impl Confidence {
             1 => Self::Medium,
             _ => Self::High,
         }
+    }
+}
+
+impl fmt::Display for Confidence {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::High => "high",
+            Self::Medium => "medium",
+            Self::Low => "low",
+        })
     }
 }
 

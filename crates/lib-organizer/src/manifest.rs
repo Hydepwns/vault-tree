@@ -141,6 +141,22 @@ impl Manifest {
             .map(|pos| self.entries.remove(pos))
     }
 
+    pub fn mark_indexed(&mut self, hash: &str) {
+        let now = Utc::now();
+        if let Some(entry) = self.entries.iter_mut().find(|e| e.hash == hash) {
+            entry.indexed_at = Some(now);
+        }
+    }
+
+    pub fn mark_indexed_batch(&mut self, hashes: &[String]) {
+        let now = Utc::now();
+        for entry in &mut self.entries {
+            if hashes.contains(&entry.hash) {
+                entry.indexed_at = Some(now);
+            }
+        }
+    }
+
     pub fn save(&mut self) -> anyhow::Result<()> {
         self.updated = Utc::now();
         Ok(())

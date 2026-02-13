@@ -29,13 +29,22 @@ impl Default for CompressionConfig {
     }
 }
 
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            library_path: PathBuf::new(),
+            default_topics: default_topics(),
+            compression: CompressionConfig::default(),
+            keyword_rules: default_keyword_rules(),
+        }
+    }
+}
+
 impl Config {
     pub fn new(library_path: impl Into<PathBuf>) -> Self {
         Self {
             library_path: library_path.into(),
-            default_topics: default_topics(),
-            compression: CompressionConfig::default(),
-            keyword_rules: default_keyword_rules(),
+            ..Default::default()
         }
     }
 

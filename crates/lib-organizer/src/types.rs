@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,6 +39,19 @@ impl FileType {
 
     pub fn is_supported(&self) -> bool {
         !matches!(self, Self::Unknown)
+    }
+}
+
+impl fmt::Display for FileType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Pdf => "pdf",
+            Self::Epub => "epub",
+            Self::Djvu => "djvu",
+            Self::Mobi => "mobi",
+            Self::Chm => "chm",
+            Self::Unknown => "?",
+        })
     }
 }
 
@@ -90,6 +104,8 @@ pub struct LibEntry {
     pub author: Option<String>,
     pub ingest_date: DateTime<Utc>,
     pub tags: Vec<String>,
+    #[serde(default)]
+    pub indexed_at: Option<DateTime<Utc>>,
 }
 
 impl LibEntry {
@@ -114,6 +130,7 @@ impl LibEntry {
             author: None,
             ingest_date: Utc::now(),
             tags: Vec::new(),
+            indexed_at: None,
         }
     }
 

@@ -1,15 +1,37 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::{generate, Shell};
 use indicatif::{ProgressBar, ProgressStyle};
+use std::io;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+const TICK_MS: u64 = 80;
+
+fn spinner_style() -> ProgressStyle {
+    ProgressStyle::default_spinner()
+        .template(" {spinner} {msg}")
+        .unwrap()
+        .tick_chars("▏▎▍▌▋▊▉█▉▋▌▍▎")
+}
+
+fn bar_style() -> ProgressStyle {
+    ProgressStyle::default_bar()
+        .template(":: {spinner} {msg:<16} ━{bar:30}━ {pos}/{len} | ETA {eta}")
+        .unwrap()
+        .tick_chars("▏▎▍▌▋▊▉█▉▋▌▍▎")
+        .progress_chars("━━░")
+}
 
 use lib_organizer::{
-    classify_file, find_duplicates, format_secrets_results, format_size, scan_directory,
-    scan_for_secrets, Manifest, Organizer, ScanOptions, SecretsScanOptions, Topic,
+    classify_file, extract_epub_text, extract_pdf_text, find_duplicates, format_search_results,
+    format_secrets_results, format_size, scan_directory, scan_for_secrets, ExtractionJob, FileType,
+    Manifest, Organizer, ScanOptions, SearchIndex, SearchOptions, SecretsScanOptions, Topic,
 };
 
 #[derive(Parser)]
 #[command(name = "lib-organizer")]
+#[command(version)]
 #[command(about = "Organize books and manuals into a structured library")]
 struct Cli {
     #[command(subcommand)]
@@ -23,35 +45,35 @@ enum Commands {
         path: PathBuf,
     },
     Scan {
-        #[arg(short, long, help = "Directories to scan")]
+        #[arg(short, long, help = "Directories to scan [default: current dir]")]
         dirs: Vec<PathBuf>,
-        #[arg(short, long, help = "Non-recursive scan")]
+        #[arg(short, long, help = "Top-level only, skip subdirectories")]
         flat: bool,
     },
     Duplicates {
-        #[arg(short, long, help = "Directories to scan for duplicates")]
+        #[arg(short, long, help = "Directories to scan [default: current dir]")]
         dirs: Vec<PathBuf>,
     },
     Classify {
         #[arg(help = "File to classify")]
         file: PathBuf,
-        #[arg(short, long, help = "Library path for keyword rules")]
+        #[arg(short, long, help = "Library for keyword rules")]
         library: Option<PathBuf>,
     },
     Ingest {
         #[arg(help = "Files to ingest")]
         files: Vec<PathBuf>,
-        #[arg(short, long, help = "Topic to assign")]
+        #[arg(short, long, help = "Topic (e.g. programming, research, security)")]
         topic: Option<String>,
-        #[arg(short, long, help = "Subtopic to assign")]
+        #[arg(short, long, help = "Subtopic within topic")]
         subtopic: Option<String>,
-        #[arg(short, long, help = "Compress files")]
+        #[arg(short, long, help = "Compress with zstd")]
         compress: bool,
         #[arg(short, long, help = "Library path")]
         library: PathBuf,
         #[arg(long, help = "Copy instead of move")]
         copy: bool,
-        #[arg(short, long, help = "Commit message")]
+        #[arg(short, long, help = "Git commit message")]
         message: Option<String>,
     },
     Search {
@@ -59,18 +81,44 @@ enum Commands {
         query: String,
         #[arg(short, long, help = "Library path")]
         library: PathBuf,
+        #[arg(short, long, help = "Search PDF/EPUB content (not just metadata)")]
+        fulltext: bool,
+        #[arg(long, help = "Rebuild search index from scratch")]
+        rebuild_index: bool,
+        #[arg(
+            short = 'n',
+            long,
+            default_value = "20",
+            help = "Max results [default: 20]"
+        )]
+        limit: usize,
+        #[arg(long, help = "Allow typos in search terms")]
+        fuzzy: bool,
     },
     Status {
         #[arg(short, long, help = "Library path")]
         library: PathBuf,
     },
     Secrets {
-        #[arg(help = "Directories to scan for secrets")]
+        #[arg(help = "Directories to scan [default: current dir]")]
         dirs: Vec<PathBuf>,
-        #[arg(long, help = "Check file contents for secrets")]
+        #[arg(long, help = "Also check file contents")]
         content: bool,
-        #[arg(long, help = "Fail with exit code 1 if secrets found")]
+        #[arg(long, help = "Exit with error if secrets found")]
         strict: bool,
+    },
+    Index {
+        #[arg(short, long, help = "Library path")]
+        library: PathBuf,
+        #[arg(long, help = "Show index statistics")]
+        stats: bool,
+        #[arg(long, help = "Rebuild index from scratch")]
+        rebuild: bool,
+    },
+    /// Generate shell completions
+    Completions {
+        #[arg(help = "Shell to generate for (bash, zsh, fish, powershell)")]
+        shell: Shell,
     },
 }
 
@@ -91,13 +139,34 @@ fn main() -> Result<()> {
             copy,
             message,
         } => cmd_ingest(&files, topic, subtopic, compress, &library, copy, message),
-        Commands::Search { query, library } => cmd_search(&query, &library),
+        Commands::Search {
+            query,
+            library,
+            fulltext,
+            rebuild_index,
+            limit,
+            fuzzy,
+        } => cmd_search(&query, &library, fulltext, rebuild_index, limit, fuzzy),
         Commands::Status { library } => cmd_status(&library),
         Commands::Secrets {
             dirs,
             content,
             strict,
         } => cmd_secrets(&dirs, content, strict),
+        Commands::Index {
+            library,
+            stats,
+            rebuild,
+        } => cmd_index(&library, stats, rebuild),
+        Commands::Completions { shell } => {
+            generate(
+                shell,
+                &mut Cli::command(),
+                "lib-organizer",
+                &mut io::stdout(),
+            );
+            Ok(())
+        }
     }
 }
 
@@ -116,6 +185,7 @@ fn cmd_init(path: &Path) -> Result<()> {
 
 fn cmd_scan(dirs: &[PathBuf], flat: bool) -> Result<()> {
     let dirs = if dirs.is_empty() {
+        eprintln!("Scanning current directory...");
         vec![std::env::current_dir()?]
     } else {
         dirs.to_vec()
@@ -127,11 +197,8 @@ fn cmd_scan(dirs: &[PathBuf], flat: bool) -> Result<()> {
     };
 
     let pb = ProgressBar::new_spinner();
-    pb.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.green} {msg}")
-            .unwrap(),
-    );
+    pb.set_style(spinner_style());
+    pb.enable_steady_tick(Duration::from_millis(TICK_MS));
 
     let mut all_files = Vec::new();
     for dir in &dirs {
@@ -148,7 +215,7 @@ fn cmd_scan(dirs: &[PathBuf], flat: bool) -> Result<()> {
     for file in &all_files {
         let filename = file.filename().unwrap_or("?");
         println!(
-            "  {:>10}  {:?}  {}",
+            "  {:>10}  {:>4}  {}",
             format_size(file.size),
             file.file_type,
             filename
@@ -167,6 +234,7 @@ fn cmd_scan(dirs: &[PathBuf], flat: bool) -> Result<()> {
 
 fn cmd_duplicates(dirs: &[PathBuf]) -> Result<()> {
     let dirs = if dirs.is_empty() {
+        eprintln!("Scanning current directory...");
         vec![std::env::current_dir()?]
     } else {
         dirs.to_vec()
@@ -205,7 +273,7 @@ fn cmd_classify(file: &Path, library: Option<&Path>) -> Result<()> {
         let organizer = Organizer::open(lib)?;
         organizer.config().clone()
     } else {
-        lib_organizer::Config::new("/tmp/lib")
+        lib_organizer::Config::default()
     };
 
     let file_type = file
@@ -221,7 +289,7 @@ fn cmd_classify(file: &Path, library: Option<&Path>) -> Result<()> {
     if let Some(sub) = &result.subtopic {
         println!("Subtopic: {}", sub);
     }
-    println!("Confidence: {:?}", result.confidence);
+    println!("Confidence: {}", result.confidence);
 
     if !result.matched_keywords.is_empty() {
         println!("Matched keywords: {}", result.matched_keywords.join(", "));
@@ -251,12 +319,8 @@ fn cmd_ingest(
     let scanned = lib_organizer::scan_files(files)?;
 
     let pb = ProgressBar::new(scanned.len() as u64);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} {msg}")
-            .unwrap()
-            .progress_chars("#>-"),
-    );
+    pb.set_style(bar_style());
+    pb.enable_steady_tick(Duration::from_millis(TICK_MS));
 
     let options = lib_organizer::IngestOptions {
         topic: topic.map(Topic::from),
@@ -306,12 +370,27 @@ fn cmd_ingest(
     Ok(())
 }
 
-fn cmd_search(query: &str, library: &Path) -> Result<()> {
+fn cmd_search(
+    query: &str,
+    library: &Path,
+    fulltext: bool,
+    rebuild_index: bool,
+    limit: usize,
+    fuzzy: bool,
+) -> Result<()> {
+    if fulltext {
+        cmd_fulltext_search(query, library, rebuild_index, limit, fuzzy)
+    } else {
+        cmd_metadata_search(query, library)
+    }
+}
+
+fn cmd_metadata_search(query: &str, library: &Path) -> Result<()> {
     let manifest = Manifest::load(&library.join("manifest.json"))?;
     let results = manifest.search(query);
 
     if results.is_empty() {
-        println!("No matches for '{}'", query);
+        println!("No matches for '{}'.", query);
         return Ok(());
     }
 
@@ -329,6 +408,115 @@ fn cmd_search(query: &str, library: &Path) -> Result<()> {
         println!("    Size: {}", format_size(entry.size));
         println!();
     }
+
+    Ok(())
+}
+
+fn cmd_fulltext_search(
+    query: &str,
+    library: &Path,
+    rebuild_index: bool,
+    limit: usize,
+    fuzzy: bool,
+) -> Result<()> {
+    let manifest_path = library.join("manifest.json");
+    let mut manifest = Manifest::load(&manifest_path)?;
+    let mut index = SearchIndex::open_or_create(library)?;
+
+    if rebuild_index {
+        index.clear()?;
+    }
+
+    let valid_hashes: std::collections::HashSet<String> =
+        manifest.entries.iter().map(|e| e.hash.clone()).collect();
+    let pruned = index.prune_stale(&valid_hashes)?;
+    if pruned > 0 {
+        println!("Removed {} stale index entries.\n", pruned);
+    }
+
+    let jobs: Vec<ExtractionJob> = manifest
+        .entries
+        .iter()
+        .filter(|e| {
+            matches!(e.file_type, FileType::Pdf | FileType::Epub)
+                && (rebuild_index || e.indexed_at.is_none())
+        })
+        .filter_map(|e| {
+            let path = library.join(&e.path);
+            if path.exists() {
+                Some(ExtractionJob {
+                    hash: e.hash.clone(),
+                    path,
+                    file_type: e.file_type,
+                    title: e.title.clone(),
+                    author: e.author.clone(),
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let mut indexed_hashes = Vec::new();
+
+    if !jobs.is_empty() {
+        let pb = ProgressBar::new(jobs.len() as u64);
+        pb.set_style(bar_style());
+        pb.set_message("Extracting");
+        pb.enable_steady_tick(Duration::from_millis(TICK_MS));
+
+        let results = {
+            let pb = &pb;
+            use rayon::prelude::*;
+            jobs.into_par_iter()
+                .inspect(|_| pb.inc(1))
+                .filter_map(|job| {
+                    let extracted = match job.file_type {
+                        FileType::Pdf => extract_pdf_text(&job.path).ok(),
+                        FileType::Epub => extract_epub_text(&job.path).ok(),
+                        _ => None,
+                    };
+                    extracted.and_then(|e| {
+                        if e.is_empty() {
+                            None
+                        } else {
+                            Some((job.hash, job.path, job.title, job.author, e.content))
+                        }
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+
+        pb.finish_and_clear();
+
+        for (hash, path, title, author, content) in results {
+            if index
+                .add_document(&hash, &path, title.as_deref(), author.as_deref(), &content)
+                .is_ok()
+            {
+                indexed_hashes.push(hash);
+            }
+        }
+
+        if !indexed_hashes.is_empty() {
+            index.commit()?;
+            manifest.mark_indexed_batch(&indexed_hashes);
+            manifest.save_to(&manifest_path)?;
+        }
+    }
+
+    if !indexed_hashes.is_empty() {
+        println!("Indexed {} new documents.\n", indexed_hashes.len());
+    }
+
+    let options = SearchOptions {
+        limit,
+        fuzzy,
+        ..Default::default()
+    };
+
+    let results = index.search(query, &options)?;
+    print!("{}", format_search_results(&results, query));
 
     Ok(())
 }
@@ -355,6 +543,7 @@ fn cmd_status(library: &Path) -> Result<()> {
 
 fn cmd_secrets(dirs: &[PathBuf], check_content: bool, strict: bool) -> Result<()> {
     let dirs = if dirs.is_empty() {
+        eprintln!("Scanning current directory...");
         vec![std::env::current_dir()?]
     } else {
         dirs.to_vec()
@@ -388,10 +577,138 @@ fn cmd_secrets(dirs: &[PathBuf], check_content: bool, strict: bool) -> Result<()
 
     if strict && !all_results.is_empty() {
         anyhow::bail!(
-            "Found {} sensitive file(s) ({} critical). Use --strict=false to ignore.",
+            "Found {} sensitive file(s) ({} critical). Remove --strict to continue.",
             all_results.len(),
             critical_count
         );
+    }
+
+    Ok(())
+}
+
+fn cmd_index(library: &Path, stats: bool, rebuild: bool) -> Result<()> {
+    let manifest_path = library.join("manifest.json");
+    let mut manifest = Manifest::load(&manifest_path)?;
+    let mut index = SearchIndex::open_or_create(library)?;
+
+    if stats {
+        let index_stats = index.stats();
+        println!("Search Index Statistics");
+        println!("-----------------------");
+        println!("Path: {}", index_stats.index_path.display());
+        println!("Documents: {}", index_stats.document_count);
+        println!("Size: {}", index_stats.format_size());
+        println!("Segments: {}", index_stats.segment_count);
+
+        let indexed_count = manifest
+            .entries
+            .iter()
+            .filter(|e| e.indexed_at.is_some())
+            .count();
+        let indexable_count = manifest
+            .entries
+            .iter()
+            .filter(|e| matches!(e.file_type, FileType::Pdf | FileType::Epub))
+            .count();
+
+        println!("\nManifest Status");
+        println!("---------------");
+        println!("Indexed entries: {}/{}", indexed_count, indexable_count);
+
+        return Ok(());
+    }
+
+    if rebuild {
+        println!("Rebuilding index...");
+        index.clear()?;
+    }
+
+    let valid_hashes: std::collections::HashSet<String> =
+        manifest.entries.iter().map(|e| e.hash.clone()).collect();
+    let pruned = index.prune_stale(&valid_hashes)?;
+    if pruned > 0 {
+        println!("Removed {} stale entries.", pruned);
+    }
+
+    let jobs: Vec<ExtractionJob> = manifest
+        .entries
+        .iter()
+        .filter(|e| {
+            matches!(e.file_type, FileType::Pdf | FileType::Epub)
+                && (rebuild || e.indexed_at.is_none())
+        })
+        .filter_map(|e| {
+            let path = library.join(&e.path);
+            if path.exists() {
+                Some(ExtractionJob {
+                    hash: e.hash.clone(),
+                    path,
+                    file_type: e.file_type,
+                    title: e.title.clone(),
+                    author: e.author.clone(),
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if jobs.is_empty() {
+        println!("Index is up to date.");
+        return Ok(());
+    }
+
+    let pb = ProgressBar::new(jobs.len() as u64);
+    pb.set_style(bar_style());
+    pb.set_message("Extracting");
+    pb.enable_steady_tick(Duration::from_millis(TICK_MS));
+
+    let results = {
+        let pb = &pb;
+        use rayon::prelude::*;
+        jobs.into_par_iter()
+            .inspect(|_| pb.inc(1))
+            .filter_map(|job| {
+                let extracted = match job.file_type {
+                    FileType::Pdf => extract_pdf_text(&job.path).ok(),
+                    FileType::Epub => extract_epub_text(&job.path).ok(),
+                    _ => None,
+                };
+                extracted.and_then(|e| {
+                    if e.is_empty() {
+                        None
+                    } else {
+                        Some((job.hash, job.path, job.title, job.author, e.content))
+                    }
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+
+    pb.finish_and_clear();
+
+    if results.is_empty() {
+        println!("No text extracted from files.");
+        return Ok(());
+    }
+
+    println!("Adding {} documents to index...", results.len());
+
+    let mut indexed_hashes = Vec::new();
+    for (hash, path, title, author, content) in results {
+        if index
+            .add_document(&hash, &path, title.as_deref(), author.as_deref(), &content)
+            .is_ok()
+        {
+            indexed_hashes.push(hash);
+        }
+    }
+
+    if !indexed_hashes.is_empty() {
+        index.commit()?;
+        manifest.mark_indexed_batch(&indexed_hashes);
+        manifest.save_to(&manifest_path)?;
+        println!("Indexed {} documents.", indexed_hashes.len());
     }
 
     Ok(())

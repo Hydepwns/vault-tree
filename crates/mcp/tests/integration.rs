@@ -515,3 +515,148 @@ fn vault_tree_invalid_path_returns_error() {
 
     assert!(json["error"].is_object());
 }
+
+// ============================================================================
+// PDF Search Tests
+// ============================================================================
+
+#[test]
+fn lib_pdf_search_returns_no_matches_on_empty_library() {
+    let dir = TempDir::new().unwrap();
+    let lib_path = dir.path().join("library");
+
+    let mut server = McpServer::new();
+
+    server
+        .handle_request(&tool_call(
+            "lib_init",
+            json!({ "path": lib_path.to_str().unwrap() }),
+        ))
+        .unwrap();
+
+    let resp = server
+        .handle_request(&tool_call(
+            "lib_pdf_search",
+            json!({
+                "library_path": lib_path.to_str().unwrap(),
+                "query": "rust programming"
+            }),
+        ))
+        .unwrap();
+
+    let json = parse_response(&resp);
+    let text = get_text_content(&json);
+
+    assert!(text.contains("No matches found"));
+    assert_eq!(json["result"]["metadata"]["results_count"], 0);
+    assert_eq!(json["result"]["metadata"]["total_indexed"], 0);
+}
+
+#[test]
+fn lib_pdf_search_returns_metadata() {
+    let dir = TempDir::new().unwrap();
+    let lib_path = dir.path().join("library");
+    let source_dir = dir.path().join("source");
+    fs::create_dir(&source_dir).unwrap();
+    fs::write(source_dir.join("test.pdf"), b"pdf content").unwrap();
+
+    let mut server = McpServer::new();
+
+    server
+        .handle_request(&tool_call(
+            "lib_init",
+            json!({ "path": lib_path.to_str().unwrap() }),
+        ))
+        .unwrap();
+
+    server
+        .handle_request(&tool_call(
+            "lib_ingest",
+            json!({
+                "library_path": lib_path.to_str().unwrap(),
+                "files": [source_dir.join("test.pdf").to_str().unwrap()],
+                "copy": true
+            }),
+        ))
+        .unwrap();
+
+    let resp = server
+        .handle_request(&tool_call(
+            "lib_pdf_search",
+            json!({
+                "library_path": lib_path.to_str().unwrap(),
+                "query": "something"
+            }),
+        ))
+        .unwrap();
+
+    let json = parse_response(&resp);
+
+    assert!(json["result"]["metadata"].is_object());
+    assert!(json["result"]["metadata"]["results_count"].is_number());
+    assert!(json["result"]["metadata"]["indexed_count"].is_number());
+    assert!(json["result"]["metadata"]["pruned_count"].is_number());
+    assert!(json["result"]["metadata"]["total_indexed"].is_number());
+}
+
+#[test]
+fn lib_pdf_search_with_limit_parameter() {
+    let dir = TempDir::new().unwrap();
+    let lib_path = dir.path().join("library");
+
+    let mut server = McpServer::new();
+
+    server
+        .handle_request(&tool_call(
+            "lib_init",
+            json!({ "path": lib_path.to_str().unwrap() }),
+        ))
+        .unwrap();
+
+    let resp = server
+        .handle_request(&tool_call(
+            "lib_pdf_search",
+            json!({
+                "library_path": lib_path.to_str().unwrap(),
+                "query": "test",
+                "limit": 5
+            }),
+        ))
+        .unwrap();
+
+    let json = parse_response(&resp);
+
+    assert!(json["result"]["content"].is_array());
+    assert!(json["result"]["metadata"].is_object());
+}
+
+#[test]
+fn lib_pdf_search_with_rebuild_index() {
+    let dir = TempDir::new().unwrap();
+    let lib_path = dir.path().join("library");
+
+    let mut server = McpServer::new();
+
+    server
+        .handle_request(&tool_call(
+            "lib_init",
+            json!({ "path": lib_path.to_str().unwrap() }),
+        ))
+        .unwrap();
+
+    let resp = server
+        .handle_request(&tool_call(
+            "lib_pdf_search",
+            json!({
+                "library_path": lib_path.to_str().unwrap(),
+                "query": "test",
+                "rebuild_index": true
+            }),
+        ))
+        .unwrap();
+
+    let json = parse_response(&resp);
+
+    assert!(json["result"]["content"].is_array());
+    assert!(json["result"]["metadata"]["total_indexed"].is_number());
+}

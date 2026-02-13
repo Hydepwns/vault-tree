@@ -4,9 +4,10 @@ use std::path::Path;
 use vault_tree_core::{generate_tree, render_tree, search_vault, SearchOptions, TreeOptions};
 
 use lib_organizer::{
-    classify_file, find_duplicates, format_secrets_results, format_size, scan_directory,
-    scan_files, scan_for_secrets, Config, FileType, IngestOptions, Manifest, Organizer,
-    ScanOptions, SecretsScanOptions, Topic,
+    classify_file, find_duplicates, format_search_results, format_secrets_results, format_size,
+    scan_directory, scan_files, scan_for_secrets, Config, FileType, IngestOptions, Manifest,
+    Organizer, ScanOptions, SearchIndex, SearchOptions as PdfSearchOptions, SecretsScanOptions,
+    Topic,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -224,6 +225,32 @@ pub fn list_tools() -> Vec<ToolDefinition> {
                 "required": ["paths"]
             }),
         },
+        ToolDefinition {
+            name: "lib_pdf_search".to_string(),
+            description: "Full-text search across PDF documents in a library using tantivy".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "library_path": {
+                        "type": "string",
+                        "description": "Path to the library"
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Search query (supports AND, OR, phrase queries)"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum results to return (default 20)"
+                    },
+                    "rebuild_index": {
+                        "type": "boolean",
+                        "description": "Force rebuild of the search index (default false)"
+                    }
+                },
+                "required": ["library_path", "query"]
+            }),
+        },
     ]
 }
 
@@ -295,6 +322,15 @@ struct SecretsScanArgs {
     paths: Vec<String>,
     #[serde(default)]
     check_content: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct LibPdfSearchArgs {
+    library_path: String,
+    query: String,
+    limit: Option<usize>,
+    #[serde(default)]
+    rebuild_index: bool,
 }
 
 fn default_true() -> bool {
@@ -379,7 +415,7 @@ pub fn call_tool(name: &str, arguments: Value) -> Result<Value, String> {
             for file in &all_files {
                 let filename = file.filename().unwrap_or("?");
                 output.push_str(&format!(
-                    "{:>10}  {:?}  {}\n",
+                    "{:>10}  {:>4}  {}\n",
                     format_size(file.size),
                     file.file_type,
                     filename
@@ -454,7 +490,7 @@ pub fn call_tool(name: &str, arguments: Value) -> Result<Value, String> {
                     .map_err(|e| format!("failed to open library: {}", e))?;
                 organizer.config().clone()
             } else {
-                Config::new("/tmp/lib")
+                Config::default()
             };
 
             let mut output = String::new();
@@ -474,7 +510,7 @@ pub fn call_tool(name: &str, arguments: Value) -> Result<Value, String> {
                         if let Some(sub) = &result.subtopic {
                             output.push_str(&format!("Subtopic: {}\n", sub));
                         }
-                        output.push_str(&format!("Confidence: {:?}\n", result.confidence));
+                        output.push_str(&format!("Confidence: {}\n", result.confidence));
                         if !result.matched_keywords.is_empty() {
                             output.push_str(&format!(
                                 "Matched keywords: {}\n",
@@ -582,7 +618,7 @@ pub fn call_tool(name: &str, arguments: Value) -> Result<Value, String> {
                 return Ok(json!({
                     "content": [{
                         "type": "text",
-                        "text": format!("No matches for '{}'", args.query)
+                        "text": format!("No matches for '{}'.", args.query)
                     }]
                 }));
             }
@@ -690,6 +726,100 @@ pub fn call_tool(name: &str, arguments: Value) -> Result<Value, String> {
                 "metadata": {
                     "secrets_found": results.len(),
                     "critical_count": results.iter().filter(|r| r.severity() == lib_organizer::Severity::Critical).count()
+                }
+            }))
+        }
+        "lib_pdf_search" => {
+            let args: LibPdfSearchArgs = serde_json::from_value(arguments)
+                .map_err(|e| format!("invalid arguments: {}", e))?;
+
+            let library_path = Path::new(&args.library_path);
+
+            let mut index = SearchIndex::open_or_create(library_path)
+                .map_err(|e| format!("failed to open search index: {}", e))?;
+
+            let manifest_path = library_path.join("manifest.json");
+            let mut manifest = Manifest::load(&manifest_path)
+                .map_err(|e| format!("failed to load manifest: {}", e))?;
+
+            if args.rebuild_index {
+                index
+                    .clear()
+                    .map_err(|e| format!("failed to clear index: {}", e))?;
+            }
+
+            let valid_hashes: std::collections::HashSet<String> =
+                manifest.entries.iter().map(|e| e.hash.clone()).collect();
+            let pruned = index
+                .prune_stale(&valid_hashes)
+                .map_err(|e| format!("failed to prune stale entries: {}", e))?;
+
+            let mut indexed_hashes = Vec::new();
+            for entry in &manifest.entries {
+                if !args.rebuild_index && entry.indexed_at.is_some() {
+                    continue;
+                }
+
+                let file_path = library_path.join(&entry.path);
+                if !file_path.exists() {
+                    continue;
+                }
+
+                let result = match entry.file_type {
+                    FileType::Pdf => index.add_pdf(
+                        &entry.hash,
+                        &file_path,
+                        entry.title.as_deref(),
+                        entry.author.as_deref(),
+                    ),
+                    FileType::Epub => index.add_epub(
+                        &entry.hash,
+                        &file_path,
+                        entry.title.as_deref(),
+                        entry.author.as_deref(),
+                    ),
+                    _ => continue,
+                };
+
+                if result.is_ok() {
+                    indexed_hashes.push(entry.hash.clone());
+                }
+            }
+
+            if !indexed_hashes.is_empty() {
+                index
+                    .commit()
+                    .map_err(|e| format!("failed to commit index: {}", e))?;
+
+                manifest.mark_indexed_batch(&indexed_hashes);
+                manifest
+                    .save_to(&manifest_path)
+                    .map_err(|e| format!("failed to save manifest: {}", e))?;
+            }
+
+            let indexed_count = indexed_hashes.len();
+
+            let search_options = PdfSearchOptions {
+                limit: args.limit.unwrap_or(20),
+                ..Default::default()
+            };
+
+            let results = index
+                .search(&args.query, &search_options)
+                .map_err(|e| format!("search failed: {}", e))?;
+
+            let output = format_search_results(&results, &args.query);
+
+            Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": output
+                }],
+                "metadata": {
+                    "results_count": results.len(),
+                    "indexed_count": indexed_count,
+                    "pruned_count": pruned,
+                    "total_indexed": index.document_count()
                 }
             }))
         }
