@@ -7,6 +7,7 @@ An MCP server that gives Claude Code deep understanding of Obsidian vaults - wik
 - **vault-tree-core**: Rust library for vault parsing
 - **vault-tree-mcp**: Standalone MCP server (stdio)
 - **vault-tree-wasm**: WASM bindings for browser/plugin use
+- **lib-organizer**: Document library organizer with CLI and full-text search
 - **plugin**: Obsidian plugin with embedded WASM and MCP server
 
 ## Quick Start
@@ -156,6 +157,34 @@ Regex search across all markdown files:
 }
 ```
 
+### Library Tools
+
+Manage a document library (PDF, EPUB, DJVU, MOBI):
+
+| Tool | Description |
+|------|-------------|
+| `lib_init` | Initialize a new library with git tracking |
+| `lib_scan` | Scan directories for documents |
+| `lib_duplicates` | Find duplicate files by BLAKE3 hash |
+| `lib_classify` | Get topic suggestions from filename |
+| `lib_ingest` | Add files to library with auto-classification |
+| `lib_search` | Search library metadata |
+| `lib_pdf_search` | Full-text search in PDF/EPUB content (Tantivy) |
+| `lib_status` | Show library statistics |
+| `secrets_scan` | Detect sensitive files (keys, credentials) |
+
+### lib-organizer CLI
+
+```bash
+lib-organizer init ~/library              # Create library
+lib-organizer scan -d ~/Downloads         # Find documents
+lib-organizer ingest -l ~/library *.pdf   # Add to library
+lib-organizer search -l ~/library "rust"  # Search metadata
+lib-organizer search -l ~/library --fulltext "ownership"  # Full-text search
+lib-organizer secrets ~/projects --strict # Scan for secrets
+lib-organizer completions zsh             # Generate shell completions
+```
+
 ## Plugin Commands
 
 - **Copy vault tree to clipboard**
@@ -194,27 +223,18 @@ echo '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"vault_tree
 vault-tree/
 ├── Cargo.toml              # Workspace root
 ├── crates/
-│   ├── core/               # Shared Rust library
+│   ├── core/               # Vault parsing library
+│   ├── mcp/                # MCP server
+│   ├── lib-organizer/      # Document library + CLI
 │   │   └── src/
-│   │       ├── tree.rs
-│   │       ├── frontmatter.rs
-│   │       ├── links.rs
-│   │       ├── search.rs
-│   │       └── fingerprint.rs
-│   ├── mcp/                # Standalone MCP server
-│   │   └── src/
-│   │       ├── main.rs
-│   │       ├── server.rs
-│   │       └── tools.rs
+│   │       ├── cli.rs      # Binary entry point
+│   │       ├── scanner.rs  # File discovery
+│   │       ├── classifier.rs
+│   │       ├── organizer.rs
+│   │       ├── search/     # Tantivy full-text search
+│   │       └── secrets.rs
 │   └── wasm/               # WASM bindings
 ├── plugin/                 # Obsidian plugin
-│   ├── src/
-│   │   ├── main.ts
-│   │   ├── settings.ts
-│   │   ├── wasm/
-│   │   ├── tree/
-│   │   └── mcp/
-│   └── wasm/               # Built WASM output
 └── README.md
 ```
 

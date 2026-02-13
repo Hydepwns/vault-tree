@@ -2,8 +2,10 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{generate, Shell};
 use indicatif::{ProgressBar, ProgressStyle};
+use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 use std::time::Duration;
 
 const TICK_MS: u64 = 80;
@@ -24,9 +26,9 @@ fn bar_style() -> ProgressStyle {
 }
 
 use lib_organizer::{
-    classify_file, extract_epub_text, extract_pdf_text, find_duplicates, format_search_results,
-    format_secrets_results, format_size, scan_directory, scan_for_secrets, ExtractionJob, FileType,
-    Manifest, Organizer, ScanOptions, SearchIndex, SearchOptions, SecretsScanOptions, Topic,
+    classify_file, find_duplicates, format_search_results, format_secrets_results, format_size,
+    scan_directory, scan_for_secrets, FileType, Manifest, Organizer, ScanOptions, SearchIndex,
+    SearchOptions, SecretsScanOptions, Topic,
 };
 
 #[derive(Parser)]
@@ -115,6 +117,17 @@ enum Commands {
         #[arg(long, help = "Rebuild index from scratch")]
         rebuild: bool,
     },
+    /// Watch directories and auto-ingest new files
+    Watch {
+        #[arg(help = "Directories to watch")]
+        dirs: Vec<PathBuf>,
+        #[arg(short, long, help = "Library path")]
+        library: PathBuf,
+        #[arg(short, long, help = "Topic to assign")]
+        topic: Option<String>,
+        #[arg(long, help = "Copy instead of move")]
+        copy: bool,
+    },
     /// Generate shell completions
     Completions {
         #[arg(help = "Shell to generate for (bash, zsh, fish, powershell)")]
@@ -158,6 +171,12 @@ fn main() -> Result<()> {
             stats,
             rebuild,
         } => cmd_index(&library, stats, rebuild),
+        Commands::Watch {
+            dirs,
+            library,
+            topic,
+            copy,
+        } => cmd_watch(&dirs, &library, topic.as_deref(), copy),
         Commands::Completions { shell } => {
             generate(
                 shell,
@@ -427,86 +446,35 @@ fn cmd_fulltext_search(
         index.clear()?;
     }
 
-    let valid_hashes: std::collections::HashSet<String> =
-        manifest.entries.iter().map(|e| e.hash.clone()).collect();
-    let pruned = index.prune_stale(&valid_hashes)?;
+    let pruned = lib_organizer::indexing::prune_stale_entries(&manifest, &mut index)?;
     if pruned > 0 {
         println!("Removed {} stale index entries.\n", pruned);
     }
 
-    let jobs: Vec<ExtractionJob> = manifest
-        .entries
-        .iter()
-        .filter(|e| {
-            matches!(e.file_type, FileType::Pdf | FileType::Epub)
-                && (rebuild_index || e.indexed_at.is_none())
-        })
-        .filter_map(|e| {
-            let path = library.join(&e.path);
-            if path.exists() {
-                Some(ExtractionJob {
-                    hash: e.hash.clone(),
-                    path,
-                    file_type: e.file_type,
-                    title: e.title.clone(),
-                    author: e.author.clone(),
-                })
-            } else {
-                None
-            }
-        })
-        .collect();
+    let jobs = lib_organizer::indexing::build_extraction_jobs(&manifest, library, rebuild_index);
 
-    let mut indexed_hashes = Vec::new();
-
-    if !jobs.is_empty() {
+    let indexed_count = if !jobs.is_empty() {
         let pb = ProgressBar::new(jobs.len() as u64);
         pb.set_style(bar_style());
         pb.set_message("Extracting");
         pb.enable_steady_tick(Duration::from_millis(TICK_MS));
 
-        let results = {
-            let pb = &pb;
-            use rayon::prelude::*;
-            jobs.into_par_iter()
-                .inspect(|_| pb.inc(1))
-                .filter_map(|job| {
-                    let extracted = match job.file_type {
-                        FileType::Pdf => extract_pdf_text(&job.path).ok(),
-                        FileType::Epub => extract_epub_text(&job.path).ok(),
-                        _ => None,
-                    };
-                    extracted.and_then(|e| {
-                        if e.is_empty() {
-                            None
-                        } else {
-                            Some((job.hash, job.path, job.title, job.author, e.content))
-                        }
-                    })
-                })
-                .collect::<Vec<_>>()
-        };
-
+        let results = lib_organizer::indexing::extract_with_progress(jobs, || pb.inc(1));
         pb.finish_and_clear();
 
-        for (hash, path, title, author, content) in results {
-            if index
-                .add_document(&hash, &path, title.as_deref(), author.as_deref(), &content)
-                .is_ok()
-            {
-                indexed_hashes.push(hash);
-            }
-        }
+        let indexed = lib_organizer::indexing::index_extracted_documents(
+            &mut index,
+            &mut manifest,
+            &manifest_path,
+            results,
+        )?;
+        indexed.len()
+    } else {
+        0
+    };
 
-        if !indexed_hashes.is_empty() {
-            index.commit()?;
-            manifest.mark_indexed_batch(&indexed_hashes);
-            manifest.save_to(&manifest_path)?;
-        }
-    }
-
-    if !indexed_hashes.is_empty() {
-        println!("Indexed {} new documents.\n", indexed_hashes.len());
+    if indexed_count > 0 {
+        println!("Indexed {} new documents.\n", indexed_count);
     }
 
     let options = SearchOptions {
@@ -623,35 +591,12 @@ fn cmd_index(library: &Path, stats: bool, rebuild: bool) -> Result<()> {
         index.clear()?;
     }
 
-    let valid_hashes: std::collections::HashSet<String> =
-        manifest.entries.iter().map(|e| e.hash.clone()).collect();
-    let pruned = index.prune_stale(&valid_hashes)?;
+    let pruned = lib_organizer::indexing::prune_stale_entries(&manifest, &mut index)?;
     if pruned > 0 {
         println!("Removed {} stale entries.", pruned);
     }
 
-    let jobs: Vec<ExtractionJob> = manifest
-        .entries
-        .iter()
-        .filter(|e| {
-            matches!(e.file_type, FileType::Pdf | FileType::Epub)
-                && (rebuild || e.indexed_at.is_none())
-        })
-        .filter_map(|e| {
-            let path = library.join(&e.path);
-            if path.exists() {
-                Some(ExtractionJob {
-                    hash: e.hash.clone(),
-                    path,
-                    file_type: e.file_type,
-                    title: e.title.clone(),
-                    author: e.author.clone(),
-                })
-            } else {
-                None
-            }
-        })
-        .collect();
+    let jobs = lib_organizer::indexing::build_extraction_jobs(&manifest, library, rebuild);
 
     if jobs.is_empty() {
         println!("Index is up to date.");
@@ -663,28 +608,7 @@ fn cmd_index(library: &Path, stats: bool, rebuild: bool) -> Result<()> {
     pb.set_message("Extracting");
     pb.enable_steady_tick(Duration::from_millis(TICK_MS));
 
-    let results = {
-        let pb = &pb;
-        use rayon::prelude::*;
-        jobs.into_par_iter()
-            .inspect(|_| pb.inc(1))
-            .filter_map(|job| {
-                let extracted = match job.file_type {
-                    FileType::Pdf => extract_pdf_text(&job.path).ok(),
-                    FileType::Epub => extract_epub_text(&job.path).ok(),
-                    _ => None,
-                };
-                extracted.and_then(|e| {
-                    if e.is_empty() {
-                        None
-                    } else {
-                        Some((job.hash, job.path, job.title, job.author, e.content))
-                    }
-                })
-            })
-            .collect::<Vec<_>>()
-    };
-
+    let results = lib_organizer::indexing::extract_with_progress(jobs, || pb.inc(1));
     pb.finish_and_clear();
 
     if results.is_empty() {
@@ -694,21 +618,113 @@ fn cmd_index(library: &Path, stats: bool, rebuild: bool) -> Result<()> {
 
     println!("Adding {} documents to index...", results.len());
 
-    let mut indexed_hashes = Vec::new();
-    for (hash, path, title, author, content) in results {
-        if index
-            .add_document(&hash, &path, title.as_deref(), author.as_deref(), &content)
-            .is_ok()
-        {
-            indexed_hashes.push(hash);
-        }
+    let indexed = lib_organizer::indexing::index_extracted_documents(
+        &mut index,
+        &mut manifest,
+        &manifest_path,
+        results,
+    )?;
+
+    if !indexed.is_empty() {
+        println!("Indexed {} documents.", indexed.len());
     }
 
-    if !indexed_hashes.is_empty() {
-        index.commit()?;
-        manifest.mark_indexed_batch(&indexed_hashes);
-        manifest.save_to(&manifest_path)?;
-        println!("Indexed {} documents.", indexed_hashes.len());
+    Ok(())
+}
+
+fn cmd_watch(dirs: &[PathBuf], library: &Path, topic: Option<&str>, copy: bool) -> Result<()> {
+    let dirs = if dirs.is_empty() {
+        eprintln!("Watching current directory...");
+        vec![std::env::current_dir()?]
+    } else {
+        dirs.to_vec()
+    };
+
+    let mut organizer = Organizer::open(library)?;
+
+    let (tx, rx) = mpsc::channel();
+
+    let mut watcher = RecommendedWatcher::new(tx, Config::default())?;
+
+    for dir in &dirs {
+        println!("Watching: {}", dir.display());
+        watcher.watch(dir, RecursiveMode::Recursive)?;
+    }
+
+    println!("\nWaiting for new files... (Ctrl+C to stop)\n");
+
+    let options = lib_organizer::IngestOptions {
+        topic: topic.map(Topic::from),
+        subtopic: None,
+        compress: false,
+        move_file: !copy,
+    };
+
+    for res in rx {
+        match res {
+            Ok(event) => {
+                if !matches!(
+                    event.kind,
+                    notify::EventKind::Create(_) | notify::EventKind::Modify(_)
+                ) {
+                    continue;
+                }
+
+                for path in event.paths {
+                    if !path.is_file() {
+                        continue;
+                    }
+
+                    let ext = path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .map(|s| s.to_lowercase());
+
+                    let is_supported = matches!(
+                        ext.as_deref(),
+                        Some("pdf") | Some("epub") | Some("djvu") | Some("mobi") | Some("chm")
+                    );
+
+                    if !is_supported {
+                        continue;
+                    }
+
+                    // Small delay to ensure file is fully written
+                    std::thread::sleep(Duration::from_millis(500));
+
+                    let scanned = match lib_organizer::scan_files(&[path.clone()]) {
+                        Ok(files) => files,
+                        Err(e) => {
+                            eprintln!("[!] Failed to scan {}: {}", path.display(), e);
+                            continue;
+                        }
+                    };
+
+                    for file in &scanned {
+                        match organizer.ingest(file, &options) {
+                            Ok(result) => {
+                                println!(
+                                    "[+] {} -> {}/{}",
+                                    file.filename().unwrap_or("?"),
+                                    result.entry.topic,
+                                    result.entry.subtopic.as_deref().unwrap_or("")
+                                );
+                                if let Err(e) = organizer.commit(&format!(
+                                    "Ingest {}",
+                                    file.filename().unwrap_or("file")
+                                )) {
+                                    eprintln!("[!] Commit failed: {}", e);
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("[!] {}: {}", file.filename().unwrap_or("?"), e);
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => eprintln!("[!] Watch error: {}", e),
+        }
     }
 
     Ok(())

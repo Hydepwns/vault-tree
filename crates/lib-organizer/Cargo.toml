@@ -49,5 +49,8 @@ pdf-extract = "0.7"
 # Full-text search
 tantivy = "0.22"
 
+# File watching
+notify = "6"
+
 [dev-dependencies]
 tempfile = "3"

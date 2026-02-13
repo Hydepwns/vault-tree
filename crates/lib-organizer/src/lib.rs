@@ -2,6 +2,7 @@ pub mod classifier;
 pub mod compression;
 pub mod config;
 pub mod git;
+pub mod indexing;
 pub mod manifest;
 pub mod organizer;
 pub mod scanner;
