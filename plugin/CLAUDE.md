@@ -14,7 +14,7 @@ Output: `main.js` in plugin root (loaded by Obsidian)
 
 ## Architecture
 
-Obsidian plugin exposing vault operations via MCP (Model Context Protocol) servers. Claude Code connects via WebSocket (port 22365) or HTTP (port 22366).
+Obsidian plugin exposing vault operations via MCP servers. Claude Code connects via WebSocket (port 22365) or HTTP (port 22366).
 
 ### Core Flow
 
@@ -26,37 +26,31 @@ main.ts (Plugin)
     |       +-- WebSocket server (port 22365) - CLI clients
     |       +-- HTTP/SSE server (port 22366) - Desktop clients
     |       |
-    |       +-- tools.ts (tool definitions + handlers)
-    |               |
-    |               +-- tree/      (vault_tree, vault_search)
-    |               +-- organize/  (triage, ingest, duplicates)
-    |               +-- knowledge/ (lookup, link suggestions)
-    |               +-- publish/   (blog publishing)
+    |       +-- tools/ (modular tool handlers)
+    |               +-- vault.ts, organize.ts, knowledge.ts
+    |               +-- links.ts, publish.ts
     |
+    +-- knowledge/ (15 providers + LRU cache)
     +-- Settings UI (settings.ts)
-    +-- Modal UIs (triage-modal, preview)
 ```
 
-### Key Interfaces
+### Knowledge Providers
 
-**Knowledge Providers** (`knowledge/types.ts`):
-- `KnowledgeProvider` - external data sources (wikipedia, arxiv, github, etc.)
-- `AIProvider` - link suggestion providers (ollama, openai)
-- Both implement `isAvailable()` and their main lookup/suggest method
+15 providers in `knowledge/providers/`:
+- General: wikipedia, dbpedia, wikidata
+- Code: github, sourceforge, npm, crates.io, stackoverflow
+- Social: reddit
+- Reference: openlibrary, arxiv, musicbrainz, wikiart
+- Specialized: defillama, shodan
 
-**Organization** (`organize/types.ts`):
-- `PlacementSuggestion` - folder recommendation with confidence score
-- `FolderStats` - aggregated tags/keywords per folder for matching
-- `TriageItem` - user decision state for inbox processing
+Registry with LRU cache (100 items, 15min TTL). Configure via `configureShodan(apiKey)` and `configureGitHub(token)`.
 
 ### Adding Providers
 
 **Knowledge Provider:**
 1. Implement `KnowledgeProvider` interface in `knowledge/providers/`
-2. Register in `knowledge/registry.ts`
-3. Add to provider union type and settings dropdown
-4. Add enum value in `mcp/tools.ts` schema
-5. Update generator folder mapping in `knowledge/generator.ts`
+2. Register in `knowledge/registry.ts` (add to createDefaultProviders, PROVIDER_ORDER, type union)
+3. Add enum value in `mcp/tools/knowledge.ts` schema
 
 **AI Provider:**
 1. Implement `AIProvider` interface in `knowledge/providers/ai/`
@@ -65,9 +59,8 @@ main.ts (Plugin)
 ### Patterns
 
 - Functional style: prefer `filter/map/reduce` over imperative loops
-- Discriminated unions for result types (e.g., `ProcessedFile` in ingest.ts)
-- Pure functions for logic, side effects isolated in orchestrating functions
-- Error handling: always log with `[module]` prefix, never swallow silently
+- Discriminated unions for result types
+- Error handling: log with `[module]` prefix, never swallow silently
 
 ## MCP Tools
 

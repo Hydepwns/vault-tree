@@ -21,40 +21,46 @@ cd plugin && npm install && npm run build
 
 ## Architecture
 
-This is a Rust workspace with four crates:
+Rust workspace with four crates plus an Obsidian plugin.
 
 ### vault-tree-core
-Shared library for Obsidian vault parsing:
-- `tree.rs` - Generate annotated vault trees with tags, dates, link counts
-- `frontmatter.rs` - YAML frontmatter extraction
-- `links.rs` - Wikilink parsing and backlink indexing
-- `search.rs` - Regex search across markdown files
-- `fingerprint.rs` - Content hashing
+Shared library for Obsidian vault parsing (tree.rs, frontmatter.rs, links.rs, search.rs, fingerprint.rs).
 
 ### vault-tree-mcp
 Standalone MCP server (JSON-RPC over stdio):
-- `server.rs` - MCP protocol handler (initialize, tools/list, tools/call)
-- `tools.rs` - Tool definitions and implementations
+- `server.rs` - MCP protocol handler
+- `tools/` - Modular tool implementations (vault, library, knowledge, secrets)
+- `knowledge/` - 15 external data providers with LRU caching
 - `transport.rs` - JSON-RPC types
 
 ### lib-organizer
-Document library organizer with CLI:
-- `scanner.rs` - Scan directories for PDF/EPUB/DJVU/MOBI files
-- `classifier.rs` - Topic classification by filename keywords
-- `organizer.rs` - Ingest files into organized library with git tracking
-- `search/` - Tantivy-based full-text PDF/EPUB search
-- `secrets.rs` - Detect sensitive files (private keys, credentials)
-- `cli.rs` - Binary with subcommands: init, scan, ingest, search, etc.
+Document library organizer with CLI (scanner, classifier, organizer, Tantivy search, secrets detection).
 
 ### vault-tree-wasm
 WASM bindings for browser/Obsidian plugin use.
 
+## Knowledge Providers
+
+15 providers in `crates/mcp/src/knowledge/`:
+- General: wikipedia, dbpedia, wikidata
+- Code: github, sourceforge, npm, crates.io, stackoverflow
+- Social: reddit
+- Reference: openlibrary, arxiv, musicbrainz, wikiart
+- Specialized: defillama, shodan
+
+Registry uses LRU cache (100 items, 15min TTL). Auto-lookup tries providers in PROVIDER_ORDER.
+
+## Environment Variables
+
+- `GITHUB_TOKEN` - Higher rate limits (5000/hr vs 60/hr)
+- `SHODAN_API_KEY` - Required for Shodan provider
+
 ## MCP Tools
 
-The MCP server exposes these tools:
-- `vault_tree`, `vault_search` - Obsidian vault operations
+- `vault_tree`, `vault_search` - Vault operations
+- `knowledge_lookup` - External knowledge lookups
 - `lib_scan`, `lib_duplicates`, `lib_classify`, `lib_ingest`, `lib_search`, `lib_status`, `lib_init` - Library management
-- `lib_pdf_search` - Full-text search in PDF/EPUB content
+- `lib_pdf_search` - Full-text PDF/EPUB search
 - `secrets_scan` - Find sensitive files
 
 ## Testing MCP Server
@@ -68,6 +74,5 @@ echo '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' | ./target/rel
 
 - Use `thiserror` for library errors, `anyhow` for applications
 - Implement `Display` for user-facing types (not Debug format in output)
-- Progress bars use minimal style: `:: {spinner} {msg} ━{bar}━ {pos}/{len} | ETA {eta}`
-- CLI help text should show defaults: `[default: current dir]`
-- Final status messages end with periods
+- Progress bars: `:: {spinner} {msg} ━{bar}━ {pos}/{len} | ETA {eta}`
+- CLI help shows defaults: `[default: current dir]`
