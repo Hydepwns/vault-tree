@@ -10,10 +10,13 @@ import { ShodanProvider } from "./providers/shodan";
 import { GitHubProvider } from "./providers/github";
 import { SourceForgeProvider } from "./providers/sourceforge";
 import { DefiLlamaProvider } from "./providers/defillama";
-import { GitHubProvider } from "./providers/github";
+import { NpmProvider } from "./providers/npm";
+import { CratesIoProvider } from "./providers/crates";
+import { StackOverflowProvider } from "./providers/stackoverflow";
+import { RedditProvider } from "./providers/reddit";
 import { LRUCache, createCacheKey } from "./cache";
 
-export type KnowledgeProviderType = "wikipedia" | "wikidata" | "wikiart" | "openlibrary" | "musicbrainz" | "dbpedia" | "arxiv" | "shodan" | "github" | "sourceforge" | "defillama" | "auto";
+export type KnowledgeProviderType = "wikipedia" | "wikidata" | "wikiart" | "openlibrary" | "musicbrainz" | "dbpedia" | "arxiv" | "shodan" | "github" | "sourceforge" | "defillama" | "npm" | "crates.io" | "stackoverflow" | "reddit" | "auto";
 export type AIProviderType = "none" | "ollama" | "openai";
 
 export interface RegistryOptions {
@@ -28,6 +31,10 @@ const PROVIDER_ORDER: readonly string[] = [
   "wikidata",
   "github",
   "sourceforge",
+  "npm",
+  "crates.io",
+  "stackoverflow",
+  "reddit",
   "openlibrary",
   "arxiv",
   "musicbrainz",
@@ -44,9 +51,12 @@ const createDefaultProviders = (): KnowledgeProvider[] => [
   new MusicBrainzProvider(),
   new DBpediaProvider(),
   new ArxivProvider(),
-  new GitHubProvider(),
   new SourceForgeProvider(),
   new DefiLlamaProvider(),
+  new NpmProvider(),
+  new CratesIoProvider(),
+  new StackOverflowProvider(),
+  new RedditProvider(),
 ];
 
 const createErrorResult = (provider: string, error: string): LookupResult => ({

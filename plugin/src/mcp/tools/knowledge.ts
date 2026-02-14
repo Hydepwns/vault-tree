@@ -8,7 +8,7 @@ import { generateNoteFromEntry, formatNoteContent, type GeneratorOptions } from 
 export const knowledgeDefinitions: ToolDefinition[] = [
   {
     name: "knowledge_lookup",
-    description: "Look up information from Wikipedia, DBpedia, GitHub, OpenLibrary, arXiv, MusicBrainz, WikiArt, or Shodan",
+    description: "Look up information from Wikipedia, DBpedia, GitHub, npm, crates.io, StackOverflow, Reddit, OpenLibrary, arXiv, MusicBrainz, WikiArt, or Shodan",
     inputSchema: {
       type: "object",
       properties: {
@@ -18,7 +18,7 @@ export const knowledgeDefinitions: ToolDefinition[] = [
         },
         provider: {
           type: "string",
-          enum: ["wikipedia", "dbpedia", "wikidata", "github", "sourceforge", "openlibrary", "arxiv", "musicbrainz", "wikiart", "defillama", "shodan", "auto"],
+          enum: ["wikipedia", "dbpedia", "wikidata", "github", "sourceforge", "npm", "crates.io", "stackoverflow", "reddit", "openlibrary", "arxiv", "musicbrainz", "wikiart", "defillama", "shodan", "auto"],
           description: "Provider to use (default: auto)",
         },
         max_results: {
@@ -35,7 +35,7 @@ export const knowledgeDefinitions: ToolDefinition[] = [
   },
   {
     name: "create_note",
-    description: "Create a note from a knowledge lookup result (Wikipedia, arXiv, OpenLibrary, etc.)",
+    description: "Create a note from a knowledge lookup result (Wikipedia, arXiv, OpenLibrary, npm, crates.io, etc.)",
     inputSchema: {
       type: "object",
       properties: {
@@ -45,7 +45,7 @@ export const knowledgeDefinitions: ToolDefinition[] = [
         },
         provider: {
           type: "string",
-          enum: ["wikipedia", "dbpedia", "wikidata", "github", "sourceforge", "openlibrary", "arxiv", "musicbrainz", "wikiart", "defillama", "shodan", "auto"],
+          enum: ["wikipedia", "dbpedia", "wikidata", "github", "sourceforge", "npm", "crates.io", "stackoverflow", "reddit", "openlibrary", "arxiv", "musicbrainz", "wikiart", "defillama", "shodan", "auto"],
           description: "Provider to use (default: auto)",
         },
         result_index: {
