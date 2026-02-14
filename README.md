@@ -34,11 +34,13 @@ Add to your Claude Code MCP config:
 ### Obsidian Plugin
 
 Build the WASM module:
+
 ```bash
 cd crates/wasm && wasm-pack build --target web --out-dir ../../plugin/wasm
 ```
 
 Build the plugin:
+
 ```bash
 cd plugin && npm install && npm run build
 ```
@@ -53,25 +55,26 @@ The plugin runs an MCP server on port 22365 (WebSocket for Claude Code CLI) and 
 
 Look up external information from FOSS knowledge bases:
 
-| Provider | Type | Data |
-|----------|------|------|
-| `wikipedia` | Encyclopedia | Articles, summaries |
-| `dbpedia` | Structured data | Wikipedia as linked data |
-| `wikidata` | Knowledge graph | Entities, relations, QIDs |
-| `github` | Code | Repos, users, stars (token optional) |
-| `sourceforge` | Code | Projects, downloads |
-| `npm` | Packages | Node.js packages, versions |
-| `crates.io` | Packages | Rust crates, downloads |
-| `stackoverflow` | Q&A | Questions, answers, tags |
-| `reddit` | Social | Posts, subreddits, scores |
-| `openlibrary` | Books | Authors, works, ISBNs |
-| `arxiv` | Academic | Papers, authors, abstracts |
-| `musicbrainz` | Music | Artists, albums, tracks |
-| `wikiart` | Art | Artists, paintings |
-| `defillama` | DeFi/Crypto | Protocols, TVL, chains |
-| `shodan` | Security | IPs, ports, vulns (needs API key) |
+| Provider        | Type            | Data                                 |
+| --------------- | --------------- | ------------------------------------ |
+| `wikipedia`     | Encyclopedia    | Articles, summaries                  |
+| `dbpedia`       | Structured data | Wikipedia as linked data             |
+| `wikidata`      | Knowledge graph | Entities, relations, QIDs            |
+| `github`        | Code            | Repos, users, stars (token optional) |
+| `sourceforge`   | Code            | Projects, downloads                  |
+| `npm`           | Packages        | Node.js packages, versions           |
+| `crates.io`     | Packages        | Rust crates, downloads               |
+| `stackoverflow` | Q&A             | Questions, answers, tags             |
+| `reddit`        | Social          | Posts, subreddits, scores            |
+| `openlibrary`   | Books           | Authors, works, ISBNs                |
+| `arxiv`         | Academic        | Papers, authors, abstracts           |
+| `musicbrainz`   | Music           | Artists, albums, tracks              |
+| `wikiart`       | Art             | Artists, paintings                   |
+| `defillama`     | DeFi/Crypto     | Protocols, TVL, chains               |
+| `shodan`        | Security        | IPs, ports, vulns (needs API key)    |
 
 **Environment variables:**
+
 - `GITHUB_TOKEN` - GitHub PAT for higher rate limits (5000/hr vs 60/hr)
 - `SHODAN_API_KEY` - Required for Shodan provider
 
@@ -169,17 +172,17 @@ Regex search across all markdown files:
 
 Manage a document library (PDF, EPUB, DJVU, MOBI):
 
-| Tool | Description |
-|------|-------------|
-| `lib_init` | Initialize a new library with git tracking |
-| `lib_scan` | Scan directories for documents |
-| `lib_duplicates` | Find duplicate files by BLAKE3 hash |
-| `lib_classify` | Get topic suggestions from filename |
-| `lib_ingest` | Add files to library with auto-classification |
-| `lib_search` | Search library metadata |
+| Tool             | Description                                    |
+| ---------------- | ---------------------------------------------- |
+| `lib_init`       | Initialize a new library with git tracking     |
+| `lib_scan`       | Scan directories for documents                 |
+| `lib_duplicates` | Find duplicate files by BLAKE3 hash            |
+| `lib_classify`   | Get topic suggestions from filename            |
+| `lib_ingest`     | Add files to library with auto-classification  |
+| `lib_search`     | Search library metadata                        |
 | `lib_pdf_search` | Full-text search in PDF/EPUB content (Tantivy) |
-| `lib_status` | Show library statistics |
-| `secrets_scan` | Detect sensitive files (keys, credentials) |
+| `lib_status`     | Show library statistics                        |
+| `secrets_scan`   | Detect sensitive files (keys, credentials)     |
 
 ### lib-organizer CLI
 
