@@ -179,7 +179,7 @@ impl KnowledgeProvider for OpenLibraryProvider {
 
     fn is_available(&self) -> bool {
         self.client
-            .get(&format!("{}/search.json?q=test&limit=1", OPENLIBRARY_API))
+            .get(format!("{}/search.json?q=test&limit=1", OPENLIBRARY_API))
             .send()
             .map(|r| r.status().is_success())
             .unwrap_or(false)

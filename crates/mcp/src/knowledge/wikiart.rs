@@ -166,7 +166,7 @@ impl KnowledgeProvider for WikiArtProvider {
 
     fn is_available(&self) -> bool {
         self.client
-            .get(&format!("{}/App/Artist/AlphabetJson", WIKIART_API))
+            .get(format!("{}/App/Artist/AlphabetJson", WIKIART_API))
             .send()
             .map(|r| r.status().is_success())
             .unwrap_or(false)

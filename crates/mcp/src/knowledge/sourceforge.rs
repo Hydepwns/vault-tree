@@ -147,7 +147,7 @@ impl KnowledgeProvider for SourceForgeProvider {
 
     fn is_available(&self) -> bool {
         self.client
-            .get(&format!("{}/project/name/test/json", SOURCEFORGE_API))
+            .get(format!("{}/project/name/test/json", SOURCEFORGE_API))
             .send()
             .map(|r| r.status().is_success() || r.status().as_u16() == 404)
             .unwrap_or(false)

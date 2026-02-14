@@ -58,10 +58,14 @@ Look up external information from FOSS knowledge bases:
 | `wikipedia` | Encyclopedia | Articles, summaries |
 | `dbpedia` | Structured data | Wikipedia as linked data |
 | `wikidata` | Knowledge graph | Entities, relations, QIDs |
-| `openlibrary` | Books | Authors, works, ISBNs |
-| `arxiv` | Academic | Papers, authors, abstracts |
 | `github` | Code | Repos, users, stars (token optional) |
 | `sourceforge` | Code | Projects, downloads |
+| `npm` | Packages | Node.js packages, versions |
+| `crates.io` | Packages | Rust crates, downloads |
+| `stackoverflow` | Q&A | Questions, answers, tags |
+| `reddit` | Social | Posts, subreddits, scores |
+| `openlibrary` | Books | Authors, works, ISBNs |
+| `arxiv` | Academic | Papers, authors, abstracts |
 | `musicbrainz` | Music | Artists, albums, tracks |
 | `wikiart` | Art | Artists, paintings |
 | `defillama` | DeFi/Crypto | Protocols, TVL, chains |

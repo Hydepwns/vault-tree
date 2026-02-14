@@ -18,7 +18,7 @@ pub fn definitions() -> Vec<ToolDefinition> {
                 "provider": {
                     "type": "string",
                     "description": "Knowledge provider (auto tries providers in order)",
-                    "enum": ["auto", "wikipedia", "dbpedia", "wikidata", "github", "sourceforge", "openlibrary", "arxiv", "musicbrainz", "wikiart", "defillama", "shodan"]
+                    "enum": ["auto", "wikipedia", "dbpedia", "wikidata", "github", "sourceforge", "npm", "crates.io", "stackoverflow", "reddit", "openlibrary", "arxiv", "musicbrainz", "wikiart", "defillama", "shodan"]
                 },
                 "max_results": {
                     "type": "integer",

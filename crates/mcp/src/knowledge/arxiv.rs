@@ -188,7 +188,7 @@ impl KnowledgeProvider for ArxivProvider {
 
     fn is_available(&self) -> bool {
         self.client
-            .get(&format!("{}?search_query=all:test&max_results=1", ARXIV_API))
+            .get(format!("{}?search_query=all:test&max_results=1", ARXIV_API))
             .send()
             .map(|r| r.status().is_success())
             .unwrap_or(false)

@@ -1,12 +1,16 @@
 mod arxiv;
 mod cache;
+mod crates_io;
 mod dbpedia;
 mod defillama;
 mod github;
 mod musicbrainz;
+mod npm;
 mod openlibrary;
+mod reddit;
 mod shodan;
 mod sourceforge;
+mod stackoverflow;
 mod wikiart;
 mod wikidata;
 mod wikipedia;
@@ -18,13 +22,17 @@ use std::sync::Mutex;
 use cache::{create_cache_key, LruCache};
 
 pub use arxiv::ArxivProvider;
+pub use crates_io::CratesIoProvider;
 pub use dbpedia::DBpediaProvider;
 pub use defillama::DefiLlamaProvider;
 pub use github::GitHubProvider;
 pub use musicbrainz::MusicBrainzProvider;
+pub use npm::NpmProvider;
 pub use openlibrary::OpenLibraryProvider;
+pub use reddit::RedditProvider;
 pub use shodan::ShodanProvider;
 pub use sourceforge::SourceForgeProvider;
+pub use stackoverflow::StackOverflowProvider;
 pub use wikiart::WikiArtProvider;
 pub use wikidata::WikidataProvider;
 pub use wikipedia::WikipediaProvider;
@@ -35,6 +43,10 @@ const PROVIDER_ORDER: &[&str] = &[
     "wikidata",
     "github",
     "sourceforge",
+    "npm",
+    "crates.io",
+    "stackoverflow",
+    "reddit",
     "openlibrary",
     "arxiv",
     "musicbrainz",
@@ -123,6 +135,10 @@ impl KnowledgeRegistry {
         registry.register(Box::new(github));
 
         registry.register(Box::new(SourceForgeProvider::new()));
+        registry.register(Box::new(NpmProvider::new()));
+        registry.register(Box::new(CratesIoProvider::new()));
+        registry.register(Box::new(StackOverflowProvider::new()));
+        registry.register(Box::new(RedditProvider::new()));
         registry.register(Box::new(OpenLibraryProvider::new()));
         registry.register(Box::new(ArxivProvider::new()));
         registry.register(Box::new(MusicBrainzProvider::new()));

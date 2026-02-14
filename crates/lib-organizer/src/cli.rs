@@ -692,7 +692,7 @@ fn cmd_watch(dirs: &[PathBuf], library: &Path, topic: Option<&str>, copy: bool) 
                     // Small delay to ensure file is fully written
                     std::thread::sleep(Duration::from_millis(500));
 
-                    let scanned = match lib_organizer::scan_files(&[path.clone()]) {
+                    let scanned = match lib_organizer::scan_files(std::slice::from_ref(&path)) {
                         Ok(files) => files,
                         Err(e) => {
                             eprintln!("[!] Failed to scan {}: {}", path.display(), e);

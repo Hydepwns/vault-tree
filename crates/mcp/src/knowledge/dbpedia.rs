@@ -48,7 +48,7 @@ impl KnowledgeProvider for DBpediaProvider {
 
     fn is_available(&self) -> bool {
         self.client
-            .get(&format!("{}?query=test&maxResults=1&format=json", DBPEDIA_LOOKUP))
+            .get(format!("{}?query=test&maxResults=1&format=json", DBPEDIA_LOOKUP))
             .send()
             .map(|r| r.status().is_success())
             .unwrap_or(false)

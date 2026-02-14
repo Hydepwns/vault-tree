@@ -210,7 +210,7 @@ impl KnowledgeProvider for DefiLlamaProvider {
 
     fn is_available(&self) -> bool {
         self.client
-            .get(&format!("{}/protocols", DEFILLAMA_API))
+            .get(format!("{}/protocols", DEFILLAMA_API))
             .send()
             .map(|r| r.status().is_success())
             .unwrap_or(false)

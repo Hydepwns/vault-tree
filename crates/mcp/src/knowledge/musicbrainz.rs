@@ -235,7 +235,7 @@ impl KnowledgeProvider for MusicBrainzProvider {
 
     fn is_available(&self) -> bool {
         self.client
-            .get(&format!("{}/artist?query=test&limit=1&fmt=json", MUSICBRAINZ_API))
+            .get(format!("{}/artist?query=test&limit=1&fmt=json", MUSICBRAINZ_API))
             .send()
             .map(|r| r.status().is_success())
             .unwrap_or(false)

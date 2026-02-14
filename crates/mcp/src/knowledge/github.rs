@@ -194,7 +194,7 @@ impl KnowledgeProvider for GitHubProvider {
 
     fn is_available(&self) -> bool {
         let request = self.client
-            .get(&format!("{}/rate_limit", GITHUB_API))
+            .get(format!("{}/rate_limit", GITHUB_API))
             .header("Accept", "application/vnd.github.v3+json");
 
         self.add_auth(request)
