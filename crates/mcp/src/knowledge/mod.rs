@@ -103,7 +103,13 @@ impl KnowledgeRegistry {
         registry.register(Box::new(WikipediaProvider::new()));
         registry.register(Box::new(DBpediaProvider::new()));
         registry.register(Box::new(WikidataProvider::new()));
-        registry.register(Box::new(GitHubProvider::new()));
+
+        let github = match std::env::var("GITHUB_TOKEN") {
+            Ok(token) if !token.is_empty() => GitHubProvider::with_token(token),
+            _ => GitHubProvider::new(),
+        };
+        registry.register(Box::new(github));
+
         registry.register(Box::new(SourceForgeProvider::new()));
         registry.register(Box::new(OpenLibraryProvider::new()));
         registry.register(Box::new(ArxivProvider::new()));

@@ -60,12 +60,16 @@ Look up external information from FOSS knowledge bases:
 | `wikidata` | Knowledge graph | Entities, relations, QIDs |
 | `openlibrary` | Books | Authors, works, ISBNs |
 | `arxiv` | Academic | Papers, authors, abstracts |
-| `github` | Code | Repos, users, stars |
+| `github` | Code | Repos, users, stars (token optional) |
 | `sourceforge` | Code | Projects, downloads |
 | `musicbrainz` | Music | Artists, albums, tracks |
 | `wikiart` | Art | Artists, paintings |
 | `defillama` | DeFi/Crypto | Protocols, TVL, chains |
 | `shodan` | Security | IPs, ports, vulns (needs API key) |
+
+**Environment variables:**
+- `GITHUB_TOKEN` - GitHub PAT for higher rate limits (5000/hr vs 60/hr)
+- `SHODAN_API_KEY` - Required for Shodan provider
 
 ```json
 {

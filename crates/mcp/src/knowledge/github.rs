@@ -8,6 +8,7 @@ const GITHUB_API: &str = "https://api.github.com";
 
 pub struct GitHubProvider {
     client: Client,
+    token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -48,6 +49,24 @@ impl GitHubProvider {
                 .user_agent("vault-tree-mcp/0.1 (https://github.com/Hydepwns/vault-tree)")
                 .build()
                 .unwrap_or_else(|_| Client::new()),
+            token: None,
+        }
+    }
+
+    pub fn with_token(token: impl Into<String>) -> Self {
+        Self {
+            client: Client::builder()
+                .user_agent("vault-tree-mcp/0.1 (https://github.com/Hydepwns/vault-tree)")
+                .build()
+                .unwrap_or_else(|_| Client::new()),
+            token: Some(token.into()),
+        }
+    }
+
+    fn add_auth(&self, request: reqwest::blocking::RequestBuilder) -> reqwest::blocking::RequestBuilder {
+        match &self.token {
+            Some(token) => request.header("Authorization", format!("Bearer {}", token)),
+            None => request,
         }
     }
 
@@ -116,9 +135,11 @@ impl GitHubProvider {
             limit
         );
 
-        let response = self.client
+        let request = self.client
             .get(&url)
-            .header("Accept", "application/vnd.github.v3+json")
+            .header("Accept", "application/vnd.github.v3+json");
+
+        let response = self.add_auth(request)
             .send()
             .map_err(|e| e.to_string())?;
 
@@ -139,9 +160,11 @@ impl GitHubProvider {
     fn lookup_repo(&self, full_name: &str) -> Result<Option<KnowledgeEntry>, String> {
         let url = format!("{}/repos/{}", GITHUB_API, full_name);
 
-        let response = self.client
+        let request = self.client
             .get(&url)
-            .header("Accept", "application/vnd.github.v3+json")
+            .header("Accept", "application/vnd.github.v3+json");
+
+        let response = self.add_auth(request)
             .send()
             .map_err(|e| e.to_string())?;
 
@@ -170,9 +193,11 @@ impl KnowledgeProvider for GitHubProvider {
     }
 
     fn is_available(&self) -> bool {
-        self.client
+        let request = self.client
             .get(&format!("{}/rate_limit", GITHUB_API))
-            .header("Accept", "application/vnd.github.v3+json")
+            .header("Accept", "application/vnd.github.v3+json");
+
+        self.add_auth(request)
             .send()
             .map(|r| r.status().is_success())
             .unwrap_or(false)
