@@ -12,7 +12,7 @@ import {
   SERVER_NAME,
   SERVER_VERSION,
 } from "./types";
-import { getToolDefinitions, callTool } from "./tools";
+import { getToolDefinitions, callTool } from "./tools/index";
 import type { VaultTreeSettings } from "../settings";
 
 const WEBSOCKET_PORT = 22365;

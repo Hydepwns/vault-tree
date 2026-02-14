@@ -5,3 +5,4 @@ node_modules/
 plugin/main.js
 plugin/wasm/vault_tree_wasm_inline.js
 .search-index/
+.claude/

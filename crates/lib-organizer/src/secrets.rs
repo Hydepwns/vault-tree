@@ -261,6 +261,21 @@ pub fn scan_files_for_secrets(files: &[PathBuf], options: &ScanOptions) -> Vec<S
     results
 }
 
+/// Source code extensions to skip for filename pattern matching
+const SOURCE_CODE_EXTENSIONS: &[&str] = &[
+    "rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "c", "cpp", "h", "hpp",
+    "rb", "ex", "exs", "erl", "hs", "ml", "scala", "kt", "swift", "m", "cs",
+    "php", "pl", "pm", "lua", "vim", "el", "clj", "cljs", "r", "jl", "zig",
+    "nim", "cr", "d", "v", "asm", "s", "sh", "bash", "zsh", "fish", "ps1",
+];
+
+fn is_source_code(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| SOURCE_CODE_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
+        .unwrap_or(false)
+}
+
 fn check_filename(path: &Path) -> Option<SensitiveFile> {
     let filename = path.file_name()?.to_string_lossy().to_lowercase();
 
@@ -284,6 +299,11 @@ fn check_filename(path: &Path) -> Option<SensitiveFile> {
             reason: "Environment file pattern".to_string(),
             matched_by: MatchSource::Filename,
         });
+    }
+
+    // Skip source code files for substring pattern matching
+    if is_source_code(path) {
+        return None;
     }
 
     // Check pattern matches
@@ -319,6 +339,11 @@ fn check_extension(path: &Path) -> Option<SensitiveFile> {
 }
 
 fn check_content(path: &Path) -> Option<SensitiveFile> {
+    // Skip source code files - patterns in code are usually definitions, not secrets
+    if is_source_code(path) {
+        return None;
+    }
+
     let content = fs::read_to_string(path).ok()?;
 
     for (pattern, secret_type) in SENSITIVE_CONTENT_PATTERNS {
