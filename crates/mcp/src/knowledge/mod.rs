@@ -1,4 +1,5 @@
 mod arxiv;
+mod cache;
 mod dbpedia;
 mod defillama;
 mod github;
@@ -12,6 +13,9 @@ mod wikipedia;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Mutex;
+
+use cache::{create_cache_key, LruCache};
 
 pub use arxiv::ArxivProvider;
 pub use dbpedia::DBpediaProvider;
@@ -93,12 +97,20 @@ pub trait KnowledgeProvider: Send + Sync {
 
 pub struct KnowledgeRegistry {
     providers: HashMap<String, Box<dyn KnowledgeProvider>>,
+    cache: Mutex<LruCache>,
+    cache_enabled: bool,
 }
 
 impl KnowledgeRegistry {
     pub fn new() -> Self {
+        Self::with_cache(true, 100, 15)
+    }
+
+    pub fn with_cache(enabled: bool, max_size: usize, ttl_minutes: u64) -> Self {
         let mut registry = Self {
             providers: HashMap::new(),
+            cache: Mutex::new(LruCache::new(max_size, ttl_minutes)),
+            cache_enabled: enabled,
         };
         registry.register(Box::new(WikipediaProvider::new()));
         registry.register(Box::new(DBpediaProvider::new()));
@@ -136,9 +148,27 @@ impl KnowledgeRegistry {
         query: &str,
         options: &LookupOptions,
     ) -> Option<LookupResult> {
-        self.providers
-            .get(provider)
-            .map(|p| p.lookup(query, options))
+        let cache_key = create_cache_key(provider, query, options.max_results);
+
+        // Check cache first
+        if self.cache_enabled {
+            if let Ok(mut cache) = self.cache.lock() {
+                if let Some(cached) = cache.get(&cache_key) {
+                    return Some(cached);
+                }
+            }
+        }
+
+        let result = self.providers.get(provider).map(|p| p.lookup(query, options))?;
+
+        // Cache successful results
+        if self.cache_enabled && result.success {
+            if let Ok(mut cache) = self.cache.lock() {
+                cache.set(cache_key, result.clone());
+            }
+        }
+
+        Some(result)
     }
 
     pub fn available_providers(&self) -> Vec<&str> {
@@ -150,6 +180,17 @@ impl KnowledgeRegistry {
     }
 
     pub fn auto_lookup(&self, query: &str, options: &LookupOptions) -> LookupResult {
+        let cache_key = create_cache_key("auto", query, options.max_results);
+
+        // Check cache first
+        if self.cache_enabled {
+            if let Ok(mut cache) = self.cache.lock() {
+                if let Some(cached) = cache.get(&cache_key) {
+                    return cached;
+                }
+            }
+        }
+
         for &provider_name in PROVIDER_ORDER {
             if let Some(provider) = self.providers.get(provider_name) {
                 if !provider.is_available() {
@@ -158,12 +199,28 @@ impl KnowledgeRegistry {
 
                 let result = provider.lookup(query, options);
                 if result.success && !result.entries.is_empty() {
+                    // Cache the result
+                    if self.cache_enabled {
+                        if let Ok(mut cache) = self.cache.lock() {
+                            cache.set(cache_key, result.clone());
+                        }
+                    }
                     return result;
                 }
             }
         }
 
         LookupResult::success("auto", Vec::new())
+    }
+
+    pub fn clear_cache(&self) {
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.clear();
+        }
+    }
+
+    pub fn cache_size(&self) -> usize {
+        self.cache.lock().map(|c| c.size()).unwrap_or(0)
     }
 }
 

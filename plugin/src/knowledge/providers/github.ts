@@ -66,18 +66,35 @@ interface GitHubRepo {
   owner: { login: string };
 }
 
+interface GitHubConfig {
+  token?: string;
+}
+
 export class GitHubProvider implements KnowledgeProvider {
   readonly name = "github";
+  private token?: string;
+
+  configure(config: GitHubConfig): void {
+    this.token = config.token;
+  }
+
+  private getHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {
+      Accept: "application/vnd.github.v3+json",
+      "User-Agent": "VaultTree/0.1.0",
+    };
+    if (this.token) {
+      headers["Authorization"] = `Bearer ${this.token}`;
+    }
+    return headers;
+  }
 
   async isAvailable(): Promise<boolean> {
     try {
       const response = await requestUrl({
         url: `${GITHUB_API}/rate_limit`,
         method: "GET",
-        headers: {
-          Accept: "application/vnd.github.v3+json",
-          "User-Agent": "VaultTree/0.1.0",
-        },
+        headers: this.getHeaders(),
         throw: false,
       });
       return response.status === 200;
@@ -158,10 +175,7 @@ export class GitHubProvider implements KnowledgeProvider {
     const response = await requestUrl({
       url: `${GITHUB_API}/repos/${fullName}`,
       method: "GET",
-      headers: {
-        Accept: "application/vnd.github.v3+json",
-        "User-Agent": "VaultTree/0.1.0",
-      },
+      headers: this.getHeaders(),
       throw: false,
     });
 
@@ -181,10 +195,7 @@ export class GitHubProvider implements KnowledgeProvider {
     const response = await requestUrl({
       url: `${GITHUB_API}/users/${username}`,
       method: "GET",
-      headers: {
-        Accept: "application/vnd.github.v3+json",
-        "User-Agent": "VaultTree/0.1.0",
-      },
+      headers: this.getHeaders(),
       throw: false,
     });
 
@@ -236,10 +247,7 @@ export class GitHubProvider implements KnowledgeProvider {
     const response = await requestUrl({
       url: `${GITHUB_API}/search/repositories?${params}`,
       method: "GET",
-      headers: {
-        Accept: "application/vnd.github.v3+json",
-        "User-Agent": "VaultTree/0.1.0",
-      },
+      headers: this.getHeaders(),
       throw: false,
     });
 

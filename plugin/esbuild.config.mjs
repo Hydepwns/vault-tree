@@ -13,9 +13,10 @@ const wasmJsPath = path.join(import.meta.dirname, "wasm", "vault_tree_wasm.js");
 let wasmJs = fs.readFileSync(wasmJsPath, "utf-8");
 
 // Modify WASM JS to use inline base64 instead of fetch
+// Replace the import.meta.url pattern with inline base64 bytes
 wasmJs = wasmJs.replace(
-  /input = new URL\([^)]+\);/,
-  `input = Uint8Array.from(atob("${wasmBase64}"), c => c.charCodeAt(0));`
+  /module_or_path = new URL\([^)]+import\.meta\.url\);/,
+  `module_or_path = Uint8Array.from(atob("${wasmBase64}"), c => c.charCodeAt(0));`
 );
 
 // Write modified WASM JS for bundling

@@ -10,6 +10,7 @@ import { ShodanProvider } from "./providers/shodan";
 import { GitHubProvider } from "./providers/github";
 import { SourceForgeProvider } from "./providers/sourceforge";
 import { DefiLlamaProvider } from "./providers/defillama";
+import { GitHubProvider } from "./providers/github";
 import { LRUCache, createCacheKey } from "./cache";
 
 export type KnowledgeProviderType = "wikipedia" | "wikidata" | "wikiart" | "openlibrary" | "musicbrainz" | "dbpedia" | "arxiv" | "shodan" | "github" | "sourceforge" | "defillama" | "auto";
@@ -72,6 +73,7 @@ export class KnowledgeRegistry {
   private readonly cache: LRUCache<LookupResult>;
   private readonly cacheEnabled: boolean;
   private readonly shodanProvider: ShodanProvider;
+  private readonly githubProvider: GitHubProvider;
 
   constructor(options?: RegistryOptions) {
     this.cache = new LRUCache<LookupResult>(
@@ -81,16 +83,24 @@ export class KnowledgeRegistry {
     this.cacheEnabled = options?.enableCache !== false;
 
     this.shodanProvider = new ShodanProvider();
-    const defaultProviders = createDefaultProviders();
+    this.githubProvider = new GitHubProvider();
+    const defaultProviders = createDefaultProviders().filter(
+      (p) => p.name !== "github"
+    );
 
     this.providers = new Map([
       ...defaultProviders.map((p): [string, KnowledgeProvider] => [p.name, p]),
       [this.shodanProvider.name, this.shodanProvider],
+      [this.githubProvider.name, this.githubProvider],
     ]);
   }
 
   configureShodan(apiKey: string): void {
     this.shodanProvider.configure({ apiKey });
+  }
+
+  configureGitHub(token: string): void {
+    this.githubProvider.configure({ token });
   }
 
   registerAIProvider(provider: AIProvider): void {
