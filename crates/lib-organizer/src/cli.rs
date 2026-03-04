@@ -27,8 +27,8 @@ fn bar_style() -> ProgressStyle {
 
 use lib_organizer::{
     classify_file, find_duplicates, format_search_results, format_secrets_results, format_size,
-    scan_directory, scan_for_secrets, FileType, Manifest, Organizer, ScanOptions, SearchIndex,
-    SearchOptions, SecretsScanOptions, Topic,
+    plan_sync, scan_directory, scan_for_secrets, FileType, Manifest, Organizer, ScanOptions,
+    SearchIndex, SearchOptions, SecretsScanOptions, SyncClient, SyncConfig, Topic,
 };
 
 #[derive(Parser)]
@@ -128,6 +128,25 @@ enum Commands {
         #[arg(long, help = "Copy instead of move")]
         copy: bool,
     },
+    /// Sync library to MinIO storage
+    Sync {
+        #[arg(short, long, help = "Library path")]
+        library: PathBuf,
+        #[arg(long, help = "MinIO endpoint URL", env = "MINIO_ENDPOINT")]
+        endpoint: Option<String>,
+        #[arg(long, help = "MinIO bucket name", default_value = "droo-library")]
+        bucket: String,
+        #[arg(long, help = "MinIO access key", env = "MINIO_ACCESS_KEY")]
+        access_key: Option<String>,
+        #[arg(long, help = "MinIO secret key", env = "MINIO_SECRET_KEY")]
+        secret_key: Option<String>,
+        #[arg(long, help = "S3 key prefix", default_value = "documents")]
+        prefix: String,
+        #[arg(long, help = "Dry run - show what would be synced")]
+        dry_run: bool,
+        #[arg(long, help = "Output import manifest path")]
+        manifest: Option<PathBuf>,
+    },
     /// Generate shell completions
     Completions {
         #[arg(help = "Shell to generate for (bash, zsh, fish, powershell)")]
@@ -177,6 +196,25 @@ fn main() -> Result<()> {
             topic,
             copy,
         } => cmd_watch(&dirs, &library, topic.as_deref(), copy),
+        Commands::Sync {
+            library,
+            endpoint,
+            bucket,
+            access_key,
+            secret_key,
+            prefix,
+            dry_run,
+            manifest,
+        } => cmd_sync(
+            &library,
+            endpoint,
+            &bucket,
+            access_key,
+            secret_key,
+            &prefix,
+            dry_run,
+            manifest,
+        ),
         Commands::Completions { shell } => {
             generate(
                 shell,
@@ -725,6 +763,125 @@ fn cmd_watch(dirs: &[PathBuf], library: &Path, topic: Option<&str>, copy: bool) 
             }
             Err(e) => eprintln!("[!] Watch error: {}", e),
         }
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_sync(
+    library: &Path,
+    endpoint: Option<String>,
+    bucket: &str,
+    access_key: Option<String>,
+    secret_key: Option<String>,
+    prefix: &str,
+    dry_run: bool,
+    manifest_out: Option<PathBuf>,
+) -> Result<()> {
+    let manifest = Manifest::load(&library.join("manifest.json"))?;
+
+    if manifest.entries.is_empty() {
+        println!("Library is empty, nothing to sync.");
+        return Ok(());
+    }
+
+    // Dry run mode
+    if dry_run {
+        let plan = plan_sync(&manifest, library, prefix);
+        println!("Dry run - would sync {} files:\n", plan.len());
+
+        for (entry, s3_key) in &plan {
+            println!("  {} -> {}", entry.path.display(), s3_key);
+        }
+
+        let total_size: u64 = plan.iter().map(|(e, _)| e.size).sum();
+        println!("\nTotal: {} in {} files", format_size(total_size), plan.len());
+        return Ok(());
+    }
+
+    // Validate required config
+    let endpoint = endpoint.ok_or_else(|| {
+        anyhow::anyhow!("MinIO endpoint required. Set --endpoint or MINIO_ENDPOINT env var")
+    })?;
+    let access_key = access_key.ok_or_else(|| {
+        anyhow::anyhow!("MinIO access key required. Set --access-key or MINIO_ACCESS_KEY env var")
+    })?;
+    let secret_key = secret_key.ok_or_else(|| {
+        anyhow::anyhow!("MinIO secret key required. Set --secret-key or MINIO_SECRET_KEY env var")
+    })?;
+
+    let config = SyncConfig {
+        endpoint,
+        bucket: bucket.to_string(),
+        access_key,
+        secret_key,
+        prefix: prefix.to_string(),
+        path_style: true,
+    };
+
+    println!("Connecting to {}...", config.endpoint);
+    let client = SyncClient::new(config)?;
+
+    let pb = ProgressBar::new(manifest.entries.len() as u64);
+    pb.set_style(bar_style());
+    pb.set_message("Syncing");
+    pb.enable_steady_tick(Duration::from_millis(TICK_MS));
+
+    let mut results = Vec::new();
+    let mut uploaded = 0;
+    let mut skipped = 0;
+    let mut failed = 0;
+    let mut total_bytes = 0u64;
+
+    for entry in &manifest.entries {
+        pb.set_message(
+            entry
+                .path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("?")
+                .to_string(),
+        );
+
+        match client.sync_entry(entry, library) {
+            Ok(result) => {
+                if result.uploaded {
+                    uploaded += 1;
+                    total_bytes += entry.size;
+                    pb.println(format!("  [+] {} -> {}", entry.path.display(), result.s3_key));
+                } else {
+                    skipped += 1;
+                    pb.println(format!(
+                        "  [-] {} ({})",
+                        entry.path.display(),
+                        result.skipped_reason.as_deref().unwrap_or("skipped")
+                    ));
+                }
+                results.push(result);
+            }
+            Err(e) => {
+                failed += 1;
+                pb.println(format!("  [!] {}: {}", entry.path.display(), e));
+            }
+        }
+
+        pb.inc(1);
+    }
+
+    pb.finish_and_clear();
+
+    println!("\nSync complete:");
+    println!("  Uploaded: {} ({})", uploaded, format_size(total_bytes));
+    println!("  Skipped:  {}", skipped);
+    println!("  Failed:   {}", failed);
+
+    // Generate import manifest if requested
+    if let Some(manifest_path) = manifest_out {
+        let import_manifest = lib_organizer::build_import_manifest(&results);
+        import_manifest.save_to(&manifest_path)?;
+        println!("\nImport manifest written to: {}", manifest_path.display());
+        println!("  {} entries ready for import", import_manifest.entries.len());
     }
 
     Ok(())

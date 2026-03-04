@@ -8,6 +8,7 @@ pub mod organizer;
 pub mod scanner;
 pub mod search;
 pub mod secrets;
+pub mod sync;
 pub mod types;
 
 pub use classifier::{classify_file, ClassificationResult, Classifier, Confidence};
@@ -28,5 +29,9 @@ pub use search::{
 pub use secrets::{
     format_results as format_secrets_results, scan_files_for_secrets, scan_for_secrets,
     ScanOptions as SecretsScanOptions, SecretType, SensitiveFile, Severity,
+};
+pub use sync::{
+    build_import_manifest, compute_sha256_file, plan_sync, ImportEntry, ImportManifest,
+    SyncClient, SyncConfig, SyncResult, SyncSummary,
 };
 pub use types::{FileType, LibEntry, Topic};

@@ -24,7 +24,7 @@ anyhow.workspace = true
 blake3.workspace = true
 
 # CLI
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
 
 # Git
@@ -51,6 +51,11 @@ tantivy = "0.22"
 
 # File watching
 notify = "6"
+
+# S3/MinIO sync
+rust-s3 = { version = "0.35", default-features = false, features = ["tokio-rustls-tls"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"
